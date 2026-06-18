@@ -483,6 +483,8 @@ class PrefetchRegistry:
         if entry is not None:
             if entry.message_count == message_count and entry.cutoff == cutoff:
                 return
+            if not entry.task.done() and entry.cutoff <= cutoff:
+                return
             if not entry.task.done():
                 entry.task.cancel()
 
@@ -502,14 +504,13 @@ class PrefetchRegistry:
         entry = self._entries.pop(thread_id, None)
         if entry is None:
             return None
-        if entry.cutoff != cutoff:
+        if entry.cutoff > cutoff:
             if not entry.task.done():
                 entry.task.cancel()
             return None
         if entry.task.cancelled():
             return None
-        result = await entry.task
-        return result
+        return await entry.task
 
 
 # ---------------------------------------------------------------------------
@@ -915,7 +916,7 @@ def make_compress_node(
         if registry is not None:
             prefetched = await registry.await_result(thread_id, cutoff=cutoff)
 
-        if prefetched is not None:
+        if prefetched is not None and prefetched.cutoff == cutoff:
             logger.info(
                 "Compression fast path: applying prefetched summary "
                 "(evicted %d, kept %d)",
@@ -936,6 +937,69 @@ def make_compress_node(
                 "summary": prefetched.summary_wrapper,
                 "messages": prefetched.evictions,
             }
+
+        if prefetched is not None and prefetched.cutoff < cutoff:
+            delta_messages = messages[prefetched.cutoff:cutoff]
+            file_path: str | None = None
+            if history_dir is not None:
+                file_path = write_transcript(
+                    messages[:cutoff], thread_id,
+                    history_dir=history_dir,
+                    workspace_dir=workspace_dir,
+                )
+
+            if delta_messages:
+                logger.info(
+                    "Compression delta path: extending prefetch cutoff %d -> %d "
+                    "(%d extra messages)",
+                    prefetched.cutoff, cutoff, len(delta_messages),
+                )
+                if on_event is not None:
+                    on_event(SummarizationEvent(
+                        phase="before",
+                        cutoff_index=cutoff,
+                        messages_summarized=len(messages[:cutoff]),
+                        messages_kept=len(messages_to_keep),
+                        summary_tokens=0,
+                        file_path=file_path,
+                        thread_id=thread_id,
+                    ))
+                delta_prompt = _build_summary_prompt(
+                    messages_to_evict=delta_messages,
+                    previous_summary=prefetched.summary_wrapper,
+                    summary_prompt=summary_prompt,
+                    summary_budget=summary_budget,
+                    history_dir=history_dir,
+                    workspace_dir=workspace_dir,
+                    effective_max_length=effective_max_length,
+                )
+                summary_text = await _invoke_summary_model(summary_model, delta_prompt)
+                wrapper = _wrap_summary(
+                    summary_text, file_path,
+                    wrapper_with_path=wrapper_with_path,
+                    wrapper_no_path=wrapper_no_path,
+                )
+            else:
+                wrapper = prefetched.summary_wrapper
+
+            evictions = _build_evictions(messages[:cutoff])
+            summary_tokens = estimate_tokens(wrapper)
+            logger.info(
+                "Compression delta path: evicted %d messages, kept %d",
+                len(messages[:cutoff]),
+                len(messages_to_keep),
+            )
+            if on_event is not None:
+                on_event(SummarizationEvent(
+                    phase="after",
+                    cutoff_index=cutoff,
+                    messages_summarized=len(messages[:cutoff]),
+                    messages_kept=len(messages_to_keep),
+                    summary_tokens=summary_tokens,
+                    file_path=file_path,
+                    thread_id=thread_id,
+                ))
+            return {"summary": wrapper, "messages": evictions}
 
         file_path: str | None = None
         if history_dir is not None:

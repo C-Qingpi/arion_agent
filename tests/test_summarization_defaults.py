@@ -20,10 +20,10 @@ def test_default_budget_constants():
 
 
 def test_standard_policy_trigger_and_keep():
-    assert DEFAULT_PREFETCH_MESSAGES == 100
-    assert DEFAULT_TRIGGER_MESSAGES == 130
+    assert DEFAULT_PREFETCH_MESSAGES == 80
+    assert DEFAULT_TRIGGER_MESSAGES == 165
     assert DEFAULT_KEEP_MESSAGES == 40
-    assert STANDARD_POLICY([object()] * 129, 100, 32_000) is None
-    decision = STANDARD_POLICY([object()] * 131, 100, 32_000)
+    assert STANDARD_POLICY([object()] * 164, 100, 32_000) is None
+    decision = STANDARD_POLICY([object()] * 166, 100, 32_000)
     assert decision is not None
     assert decision.keep_last_messages == 40
