@@ -6,8 +6,8 @@ checkpointed natively by LangGraph. Crash recovery is automatic via
 checkpoint resume -- no JSONL, no stale detection.
 
 Two-tier routing keeps summarization unfeelable:
-  - should_compress (prefetch): headroom trigger; starts background LLM work
-  - must_compress (compress): hard trigger; awaits prefetch or runs sync, then evicts
+  - should_compress (prefetch): headroom trigger; background LLM, then proactive apply
+  - must_compress (compress): hard trigger; sync fallback if prefetch did not keep count down
 
 Factory functions:
   - make_should_compress: headroom conditional edge (route to prefetch)
@@ -384,7 +384,7 @@ def truncate_args(
     keep: int = DEFAULT_ARG_TRUNCATION_KEEP,
     max_length: int = DEFAULT_ARG_MAX_LENGTH,
 ) -> list[AnyMessage]:
-    """Truncate large write_file/edit_file args in old messages.
+    """Truncate large write_file/str_replace args in old messages.
 
     Only modifies messages older than (len - keep) when total count exceeds
     trigger. Reduces token usage from verbose file content in history.
@@ -400,7 +400,7 @@ def truncate_args(
             modified = False
             new_tool_calls = []
             for tc in msg.tool_calls:
-                if tc["name"] in {"write_file", "edit_file"}:
+                if tc["name"] in {"write_file", "str_replace"}:
                     args = tc.get("args", {})
                     new_args = {}
                     tc_modified = False
@@ -478,13 +478,15 @@ class PrefetchRegistry:
         message_count: int,
         cutoff: int,
         coro_factory: Callable[[], Any],
-    ) -> None:
+    ) -> bool:
+        """Start a background summary task. Returns True if a new task was created,
+        False if an equivalent or newer in-flight task already covers this cutoff."""
         entry = self._entries.get(thread_id)
         if entry is not None:
             if entry.message_count == message_count and entry.cutoff == cutoff:
-                return
+                return False
             if not entry.task.done() and entry.cutoff <= cutoff:
-                return
+                return False
             if not entry.task.done():
                 entry.task.cancel()
 
@@ -494,6 +496,20 @@ class PrefetchRegistry:
             cutoff=cutoff,
             task=task,
         )
+        return True
+
+    def take_if_ready(self, thread_id: str) -> _PrefetchResult | None:
+        """Non-blocking: pop and return the result if the background task has
+        finished. Returns None while still running, or if it was cancelled
+        (cancellation is our own doing when a cutoff regresses, not an error).
+        A genuinely failed task re-raises here so the error is exposed."""
+        entry = self._entries.get(thread_id)
+        if entry is None or not entry.task.done():
+            return None
+        self._entries.pop(thread_id, None)
+        if entry.task.cancelled():
+            return None
+        return entry.task.result()
 
     async def await_result(
         self,
@@ -732,8 +748,14 @@ def make_prefetch_node(
     cutoff_fn: Any | None = None,
     arg_max_length: int | None = None,
     prefetch_policy: Callable[..., PolicyDecision | None] | None = None,
+    on_event: SummarizationCallback | None = None,
 ) -> Callable[..., Any]:
-    """Start background summarization when headroom threshold is reached."""
+    """Start background summarization when headroom threshold is reached, and
+    apply a completed background summary as soon as it is ready.
+
+    Applying in the headroom zone evicts old messages proactively (no blocking
+    LLM call on the agent's turn), so the hard compress trigger is rarely hit.
+    The compress node remains as the synchronous safety net."""
     effective_cutoff_fn = cutoff_fn or find_safe_cutoff
     effective_max_length = arg_max_length if arg_max_length is not None else DEFAULT_ARG_MAX_LENGTH
     default_prompt, wrapper_with_path, wrapper_no_path = _resolve_prompt_wrappers(is_perpetual)
@@ -807,6 +829,27 @@ def make_prefetch_node(
         if abort_check is not None and abort_check():
             return {}
 
+        ready = registry.take_if_ready(thread_id)
+        if ready is not None:
+            logger.info(
+                "Prefetch apply: evicting %d messages, kept %d (proactive, no block)",
+                ready.messages_summarized, ready.messages_kept,
+            )
+            if on_event is not None:
+                on_event(SummarizationEvent(
+                    phase="after",
+                    cutoff_index=ready.cutoff,
+                    messages_summarized=ready.messages_summarized,
+                    messages_kept=ready.messages_kept,
+                    summary_tokens=ready.summary_tokens,
+                    file_path=ready.file_path,
+                    thread_id=thread_id,
+                ))
+            return {
+                "summary": ready.summary_wrapper,
+                "messages": ready.evictions,
+            }
+
         token_count = _estimate_messages_tokens(messages)
         decision = evaluate_prefetch_policy(
             policy, messages, token_count, max_tokens,
@@ -837,16 +880,17 @@ def make_prefetch_node(
                 messages_to_keep=messages_to_keep,
             )
 
-        registry.start(
+        started = registry.start(
             thread_id,
             message_count=message_count,
             cutoff=cutoff,
             coro_factory=_coro,
         )
-        logger.info(
-            "Prefetch started: thread=%s messages=%d cutoff=%d",
-            thread_id, message_count, cutoff,
-        )
+        if started:
+            logger.info(
+                "Prefetch started: thread=%s messages=%d cutoff=%d",
+                thread_id, message_count, cutoff,
+            )
         return {}
 
     return prefetch_node

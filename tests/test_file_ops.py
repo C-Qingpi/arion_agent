@@ -192,48 +192,76 @@ class TestWriteFile:
             assert (ws / "note.txt").read_text() == "before"
 
 
-class TestEditFile:
-    def test_replace_lines(self):
+class TestStrReplace:
+    def test_replace_first_occurrence_default(self):
         td, ws = _ws()
         with td:
             (ws / "code.py").write_text("line1\nline2\nline3\nline4")
-            revision = _extract_revision(ops.read_file("code.py", ws, show_lines=True))
-            result = ops.edit_file("code.py", 2, 3, "replaced_a\nreplaced_b", revision, ws)
+            revision = _extract_revision(ops.read_file("code.py", ws))
+            result = ops.str_replace("code.py", "line2\nline3", "replaced_a\nreplaced_b", revision, ws)
             token = _extract_undo_token(result)
-            assert "replaced lines 2-3" in result
-            assert "Removed 2 lines, added 2 lines, net change +0 lines" in result
-            assert "call read_file again with show_lines=True" in result
+            assert "Replaced: code.py" in result
+            assert "1 of 1 occurrence" in result
+            assert "Lines: 2" in result
+            assert "Revision: rev:" in result
+            assert "Preview:" in result
             content = (ws / "code.py").read_text()
             assert "replaced_a\nreplaced_b" in content
             assert "line2" not in content
             undo_result = ops.undo_file_operation(token, ws)
-            assert "Undid edit_file" in undo_result
+            assert "Undid str_replace" in undo_result
             assert (ws / "code.py").read_text() == "line1\nline2\nline3\nline4"
 
-    def test_delete_lines(self):
+    def test_replace_all_occurrences(self):
+        td, ws = _ws()
+        with td:
+            (ws / "dup.txt").write_text("beta\nother\nbeta\n")
+            revision = _extract_revision(ops.read_file("dup.txt", ws))
+            result = ops.str_replace("dup.txt", "beta", "REPLACED", revision, ws, occurrence="*")
+            assert "2 of 2 occurrences" in result
+            assert "Lines: 1, 3" in result
+            assert (ws / "dup.txt").read_text() == "REPLACED\nother\nREPLACED\n"
+
+    def test_replace_occurrence_range(self):
+        td, ws = _ws()
+        with td:
+            (ws / "many.txt").write_text("x\nx\nx\nx\n")
+            revision = _extract_revision(ops.read_file("many.txt", ws))
+            result = ops.str_replace("many.txt", "x", "Y", revision, ws, occurrence="2-3")
+            assert "2 of 4 occurrences" in result
+            assert (ws / "many.txt").read_text() == "x\nY\nY\nx\n"
+
+    def test_delete_via_empty_new_string(self):
         td, ws = _ws()
         with td:
             (ws / "code.py").write_text("keep1\ndelete_me\nkeep2")
-            revision = _extract_revision(ops.read_file("code.py", ws, show_lines=True))
-            result = ops.edit_file("code.py", 2, 2, "", revision, ws)
-            assert "replaced lines 2-2" in result
-            assert "Removed 1 lines, added 0 lines, net change -1 lines" in result
+            revision = _extract_revision(ops.read_file("code.py", ws))
+            result = ops.str_replace("code.py", "delete_me\n", "", revision, ws)
+            assert "Replaced: code.py" in result
             content = (ws / "code.py").read_text()
             assert "delete_me" not in content
 
-    def test_invalid_range(self):
+    def test_not_found(self):
         td, ws = _ws()
         with td:
             (ws / "short.txt").write_text("only\ntwo")
-            revision = _extract_revision(ops.read_file("short.txt", ws, show_lines=True))
-            result = ops.edit_file("short.txt", 5, 6, "nope", revision, ws)
-            assert "InvalidRange" in result
+            revision = _extract_revision(ops.read_file("short.txt", ws))
+            result = ops.str_replace("short.txt", "missing", "nope", revision, ws)
+            assert "NotFound" in result
+
+    def test_invalid_occurrence(self):
+        td, ws = _ws()
+        with td:
+            (ws / "short.txt").write_text("a\na\n")
+            revision = _extract_revision(ops.read_file("short.txt", ws))
+            result = ops.str_replace("short.txt", "a", "b", revision, ws, occurrence="5")
+            assert "InvalidOccurrence" in result
 
     def test_binary_rejected(self):
         td, ws = _ws()
         with td:
             (ws / "data.pdf").write_bytes(b"%PDF-1.4 binary content")
-            result = ops.edit_file("data.pdf", 1, 1, "nope", "rev:unused", ws)
+            result = ops.str_replace("data.pdf", "PDF", "nope", "rev:unused", ws)
             assert "BinaryFile" in result
 
     def test_stale_revision_rejected(self):
@@ -241,11 +269,21 @@ class TestEditFile:
         with td:
             path = ws / "code.py"
             path.write_text("line1\nline2\nline3")
-            revision = _extract_revision(ops.read_file("code.py", ws, show_lines=True))
+            revision = _extract_revision(ops.read_file("code.py", ws))
             path.write_text("line1\ninserted\nline2\nline3")
-            result = ops.edit_file("code.py", 2, 2, "updated", revision, ws)
+            result = ops.str_replace("code.py", "line2", "updated", revision, ws)
             assert "StaleRead" in result
-            assert "Line numbers may have shifted" in result
+
+    def test_returns_fresh_revision(self):
+        td, ws = _ws()
+        with td:
+            (ws / "code.py").write_text("before")
+            revision = _extract_revision(ops.read_file("code.py", ws))
+            result = ops.str_replace("code.py", "before", "after", revision, ws)
+            new_revision = _extract_revision(result)
+            assert new_revision != revision
+            read_revision = _extract_revision(ops.read_file("code.py", ws))
+            assert read_revision == new_revision
 
 
 class TestDeleteFile:

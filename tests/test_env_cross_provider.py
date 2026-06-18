@@ -62,14 +62,14 @@ async def _test_model(label: str, model_id: str):
         print(f"  >> {label} read_file PASSED")
 
         # Step 3: Edit line 3 to change the numbers
-        print(f"\n  --- {label} Step 3: edit_file ---")
+        print(f"\n  --- {label} Step 3: str_replace ---")
         result = await agent.ainvoke({"messages": [("user",
-            "Edit calc.py: replace the last line (the print line) with: print(add(100, 200))"
+            "Edit calc.py: replace the print line `print(add(10, 20))` with `print(add(100, 200))` using str_replace"
         )]})
         _show(result)
         all_text = _all_content(result)
-        assert "Edited" in all_text or "replaced" in all_text.lower(), f"{label}: edit_file failed"
-        print(f"  >> {label} edit_file PASSED")
+        assert "Replaced:" in all_text or "300" in all_text, f"{label}: str_replace failed"
+        print(f"  >> {label} str_replace PASSED")
 
         # Step 4: Run it
         print(f"\n  --- {label} Step 4: execute_python ---")

@@ -322,14 +322,14 @@ class TestMountFileOps:
             assert "TOOL ERROR" in result
             assert "ReadonlyMount" in result
 
-    def test_edit_readonly_blocked(self):
+    def test_str_replace_readonly_blocked(self):
         td, ws, mounts, mount_map = _ws_with_mounts(("Downloads", True))
         with td:
             revision = _extract_revision(ops.read_file(
-                f"{MOUNT_PREFIX}/Downloads/seed.txt", ws, show_lines=True, mounts=mount_map,
+                f"{MOUNT_PREFIX}/Downloads/seed.txt", ws, mounts=mount_map,
             ))
-            result = ops.edit_file(
-                f"{MOUNT_PREFIX}/Downloads/seed.txt", 1, 1, "hacked", revision, ws, mounts=mount_map,
+            result = ops.str_replace(
+                f"{MOUNT_PREFIX}/Downloads/seed.txt", "content", "hacked", revision, ws, mounts=mount_map,
             )
             assert "TOOL ERROR" in result
             assert "ReadonlyMount" in result
@@ -401,16 +401,21 @@ class TestMountFileOps:
             assert not mounts[0].source.joinpath("seed.txt").exists()
             assert mounts[1].source.joinpath("moved.txt").read_text() == "content from Desktop"
 
-    def test_edit_through_writable_mount(self):
+    def test_str_replace_through_writable_mount(self):
         td, ws, mounts, mount_map = _ws_with_mounts(("Desktop", False))
         with td:
             revision = _extract_revision(ops.read_file(
-                f"{MOUNT_PREFIX}/Desktop/seed.txt", ws, show_lines=True, mounts=mount_map,
+                f"{MOUNT_PREFIX}/Desktop/seed.txt", ws, mounts=mount_map,
             ))
-            result = ops.edit_file(
-                f"{MOUNT_PREFIX}/Desktop/seed.txt", 1, 1, "edited content", revision, ws, mounts=mount_map,
+            result = ops.str_replace(
+                f"{MOUNT_PREFIX}/Desktop/seed.txt",
+                "content from Desktop",
+                "edited content",
+                revision,
+                ws,
+                mounts=mount_map,
             )
-            assert "Edited" in result
+            assert "Replaced:" in result
             assert mounts[0].source.joinpath("seed.txt").read_text() == "edited content"
 
     def test_list_mount_directory(self):

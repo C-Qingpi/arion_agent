@@ -285,6 +285,7 @@ def configure_compression(
         summary_model,
         registry,
         prefetch_policy=prefetch_policy,
+        on_event=on_compress,
         **compress_kwargs_shared,
     )
     compress_node = make_compress_node(

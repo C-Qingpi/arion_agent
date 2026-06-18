@@ -369,7 +369,7 @@ print(agent.stats.summary())     # model calls, tool calls, tokens
 
 ## Tools (19 built-in + 2 optional signal + 10 optional browser)
 
-**File** (7): read_file, write_file, edit_file, delete_file, move_file, list_files, set_directory
+**File** (8): read_file, write_file, str_replace, delete_file, move_file, undo_file_operation, list_files, set_directory
 
 **Shell** (9): execute_python, execute_shell_inline, terminal_create/input/read/interrupt/reset/close/list
 

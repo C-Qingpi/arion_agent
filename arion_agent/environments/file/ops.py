@@ -15,6 +15,7 @@ import os
 import shutil
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -543,7 +544,7 @@ def write_file(
             if mode == "create":
                 if backend.exists(path):
                     return (f"TOOL ERROR (write_file)\nType: FileExists\n"
-                            f"Message: File already exists: {path}. Use edit_file to modify, "
+                            f"Message: File already exists: {path}. Use str_replace to modify, "
                             f"or write_file with mode='overwrite', 'append', or 'prepend'.")
                 backend.write_text(path, content)
                 _clear_undo_record(workspace, backend)
@@ -588,7 +589,7 @@ def write_file(
         if resolved.exists():
             return (
                 f"TOOL ERROR (write_file)\nType: FileExists\n"
-                f"Message: File already exists: {path}. Use edit_file to modify, "
+                f"Message: File already exists: {path}. Use str_replace to modify, "
                 f"or write_file with mode='overwrite', 'append', or 'prepend'."
             )
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -629,135 +630,325 @@ def write_file(
     return f"TOOL ERROR (write_file)\nType: InvalidMode\nMessage: Unknown mode '{mode}'. Use 'create', 'overwrite', 'append', or 'prepend'."
 
 
-def edit_file(
+PREVIEW_SNIPPET_CHARS = 100
+
+
+def _find_all_occurrences(content: str, needle: str) -> list[int]:
+    """Return start indices of every non-overlapping occurrence of needle."""
+    if not needle:
+        return []
+    positions: list[int] = []
+    start = 0
+    while True:
+        pos = content.find(needle, start)
+        if pos == -1:
+            break
+        positions.append(pos)
+        start = pos + len(needle)
+    return positions
+
+
+def _line_number_at(content: str, index: int) -> int:
+    """Return 1-based line number for a character index."""
+    return content.count("\n", 0, index) + 1
+
+
+def _preview_snippet(text: str, *, max_chars: int = PREVIEW_SNIPPET_CHARS) -> str:
+    """Return a single-line preview snippet."""
+    one_line = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    if len(one_line) <= max_chars:
+        return one_line
+    return one_line[: max_chars - 3] + "..."
+
+
+def _parse_occurrence_spec(spec: str, total_matches: int) -> tuple[list[int], str]:
+    """Parse occurrence selector into sorted 1-based indices and a display label.
+
+    Supported forms:
+      (default) / "1"     first match only
+      "3"                 single occurrence
+      "1-22", "3-99"      inclusive range (clamped to total_matches)
+      "3-*"               from occurrence 3 through last
+      "*", "all", "1-*"   every match
+    """
+    if total_matches == 0:
+        return [], spec.strip() or "1"
+
+    raw = (spec or "1").strip()
+    if not raw:
+        raw = "1"
+
+    lower = raw.lower()
+    if lower in {"*", "all", "1-*"}:
+        return list(range(1, total_matches + 1)), raw
+
+    if lower.endswith("-*"):
+        start_part = raw[:-2].strip()
+        if not start_part.isdigit():
+            raise ValueError(f"Invalid occurrence selector '{spec}'.")
+        start = int(start_part)
+        if start < 1:
+            raise ValueError(f"Occurrence index must be >= 1, got {start}.")
+        end = total_matches
+        label = f"{start}-*"
+        indices = list(range(start, end + 1))
+        if not indices:
+            raise ValueError(
+                f"Occurrence selector '{spec}' matches no occurrences "
+                f"(file has {total_matches} match(es))."
+            )
+        return indices, label
+
+    if "-" in raw:
+        start_part, end_part = raw.split("-", 1)
+        if not start_part.strip().isdigit() or not end_part.strip().isdigit():
+            raise ValueError(f"Invalid occurrence selector '{spec}'.")
+        start = int(start_part.strip())
+        end = int(end_part.strip())
+        if start < 1:
+            raise ValueError(f"Occurrence index must be >= 1, got {start}.")
+        if start > end:
+            raise ValueError(f"Occurrence range start ({start}) > end ({end}).")
+        clamped_end = min(end, total_matches)
+        if start > total_matches:
+            raise ValueError(
+                f"Occurrence selector '{spec}' matches no occurrences "
+                f"(file has {total_matches} match(es))."
+            )
+        label = raw if clamped_end == end else f"{start}-{clamped_end}"
+        return list(range(start, clamped_end + 1)), label
+
+    if not raw.isdigit():
+        raise ValueError(f"Invalid occurrence selector '{spec}'.")
+
+    index = int(raw)
+    if index < 1 or index > total_matches:
+        raise ValueError(
+            f"Occurrence {index} out of range; file has {total_matches} match(es)."
+        )
+    return [index], raw
+
+
+def _apply_selected_replacements(
+    content: str,
+    old_string: str,
+    new_string: str,
+    indices_1based: list[int],
+) -> str:
+    """Replace selected 1-based occurrences, processing from end to start."""
+    positions = _find_all_occurrences(content, old_string)
+    result = content
+    for index in sorted(set(indices_1based), reverse=True):
+        pos = positions[index - 1]
+        result = result[:pos] + new_string + result[pos + len(old_string):]
+    return result
+
+
+def _format_str_replace_success(
+    *,
     path: str,
-    start_line: int,
-    end_line: int,
-    replacement_content: str,
+    old_string: str,
+    new_string: str,
+    selected_indices: list[int],
+    total_matches: int,
+    occurrence_label: str,
+    line_numbers: list[int],
+    new_revision: str,
+    total_lines: int,
+    undo_token: str,
+) -> str:
+    count = len(selected_indices)
+    match_word = "occurrence" if count == 1 else "occurrences"
+    if count == total_matches and occurrence_label in {"*", "all", "1-*"}:
+        match_summary = f"{count} of {total_matches} {match_word} (occurrence={occurrence_label})"
+    elif count == 1 and total_matches == 1:
+        match_summary = f"1 of 1 {match_word}"
+    else:
+        match_summary = (
+            f"{count} of {total_matches} {match_word} "
+            f"(occurrence={occurrence_label})"
+        )
+
+    lines_part = ", ".join(str(n) for n in line_numbers)
+    return (
+        f"Replaced: {path}\n"
+        f"Matches: {match_summary}\n"
+        f"Lines: {lines_part}\n"
+        f"Preview:\n"
+        f"  - {_preview_snippet(old_string)}\n"
+        f"  + {_preview_snippet(new_string)}\n"
+        f"Revision: {new_revision}\n"
+        f"Total lines: {total_lines}\n"
+        f"Undo token: {undo_token}"
+    )
+
+
+def _str_replace_core(
+    *,
+    path: str,
+    content: str,
+    old_string: str,
+    new_string: str,
+    expected_revision: str,
+    occurrence: str,
+    workspace: Path,
+    backend: IOBackend | None,
+    before_snapshot_factory: Callable[[], _UndoSnapshot],
+    write_content: Callable[[str], None],
+) -> str:
+    if old_string == new_string:
+        return (
+            "TOOL ERROR (str_replace)\nType: InvalidParam\n"
+            "Message: old_string and new_string must differ."
+        )
+    if not old_string:
+        return (
+            "TOOL ERROR (str_replace)\nType: InvalidParam\n"
+            "Message: old_string must not be empty."
+        )
+
+    current_revision = _content_revision(content)
+    if expected_revision != current_revision:
+        return (
+            "TOOL ERROR (str_replace)\n"
+            "Type: StaleRead\n"
+            f"Message: File changed since last read for {path}. "
+            f"Expected revision {expected_revision}, but current revision is {current_revision}. "
+            "Call read_file again and retry with the new revision."
+        )
+
+    positions = _find_all_occurrences(content, old_string)
+    total_matches = len(positions)
+    if total_matches == 0:
+        return (
+            "TOOL ERROR (str_replace)\nType: NotFound\n"
+            f"Message: old_string not found in {path}. "
+            "Copy the exact literal text from read_file, including whitespace."
+        )
+
+    try:
+        selected_indices, occurrence_label = _parse_occurrence_spec(occurrence, total_matches)
+    except ValueError as exc:
+        return f"TOOL ERROR (str_replace)\nType: InvalidOccurrence\nMessage: {exc}"
+
+    line_numbers = [_line_number_at(content, positions[i - 1]) for i in selected_indices]
+    before = before_snapshot_factory()
+    final_content = _apply_selected_replacements(
+        content, old_string, new_string, selected_indices,
+    )
+    write_content(final_content)
+    after = before_snapshot_factory()
+    token = _make_undo_token()
+    _store_undo_record(workspace, backend, _UndoRecord(
+        token=token,
+        operation="str_replace",
+        before=before,
+        after=after,
+    ))
+    return _format_str_replace_success(
+        path=path,
+        old_string=old_string,
+        new_string=new_string,
+        selected_indices=selected_indices,
+        total_matches=total_matches,
+        occurrence_label=occurrence_label,
+        line_numbers=line_numbers,
+        new_revision=_content_revision(final_content),
+        total_lines=final_content.count("\n") + 1 if final_content else 0,
+        undo_token=token,
+    )
+
+
+def str_replace(
+    path: str,
+    old_string: str,
+    new_string: str,
     expected_revision: str,
     workspace: Path,
     *,
+    occurrence: str = "1",
     mounts: dict[str, MountSpec] | None = None,
 ) -> str:
-    """Replace a range of lines in a text file.
+    """Replace exact text matches in a file.
 
-    Every line in the selected range is replaced. Any original line in that
-    range that is not included in replacement_content will be removed.
+    occurrence selects which matches to replace (1-based, non-overlapping):
+      default / "1" = first match only
+      "3" = third match only
+      "1-22", "3-99" = inclusive ranges (end clamped to available matches)
+      "3-*" = from third match through last
+      "*", "all", "1-*" = every match
     """
     backend = _get_remote_backend()
     if backend is not None:
         try:
             if not backend.exists(path):
-                return f"TOOL ERROR (edit_file)\nType: FileNotFound\nMessage: {path} not found. Use write_file to create."
-            content = backend.read_text(path)
-            current_revision = _content_revision(content)
-            if expected_revision != current_revision:
                 return (
-                    "TOOL ERROR (edit_file)\n"
-                    "Type: StaleRead\n"
-                    f"Message: File changed since last read for {path}. "
-                    f"Expected revision {expected_revision}, but current revision is {current_revision}. "
-                    "Line numbers may have shifted. Call read_file again with show_lines=True and retry with the new revision."
+                    "TOOL ERROR (str_replace)\nType: FileNotFound\n"
+                    f"Message: {path} not found. Use write_file to create."
                 )
-            lines = content.split("\n")
-            total = len(lines)
-            if start_line < 1:
-                return f"TOOL ERROR (edit_file)\nType: InvalidRange\nMessage: start_line must be >= 1, got {start_line}."
-            if start_line > total:
-                return f"TOOL ERROR (edit_file)\nType: InvalidRange\nMessage: start_line {start_line} exceeds file length ({total} lines)."
-            if start_line > end_line:
-                return f"TOOL ERROR (edit_file)\nType: InvalidRange\nMessage: start_line ({start_line}) > end_line ({end_line})."
-            clamped_end = min(end_line, total)
-            notice = f" (end_line clamped from {end_line} to {total})" if end_line > total else ""
-            before = _capture_backend_snapshot(backend, path)
-            new_lines = replacement_content.split("\n") if replacement_content else []
-            result_lines = lines[:start_line - 1] + new_lines + lines[clamped_end:]
-            backend.write_text(path, "\n".join(result_lines))
-            after = _capture_backend_snapshot(backend, path)
-            token = _make_undo_token()
-            _store_undo_record(workspace, backend, _UndoRecord(
-                token=token,
-                operation="edit_file",
-                before=before,
-                after=after,
-            ))
-            removed_count = clamped_end - start_line + 1
-            added_count = len(new_lines)
-            net_change = added_count - removed_count
-            return (f"Edited: {path} - replaced lines {start_line}-{clamped_end}.{notice} "
-                    f"Removed {removed_count} lines, added {added_count} lines, net change {net_change:+d} lines. "
-                    f"New total: {len(result_lines)} lines. "
-                    f"Undo token: {token}. "
-                    "If you need another edit, call read_file again with show_lines=True to get fresh line numbers and Revision.")
-        except Exception as exc:
-            return f"TOOL ERROR (edit_file)\nType: BackendError\nMessage: {exc}"
+            content = backend.read_text(path)
 
-    resolved = _resolve_path_for_tool(path, workspace, "edit_file", mounts=mounts)
+            def before_snapshot() -> _UndoSnapshot:
+                return _capture_backend_snapshot(backend, path)
+
+            def write_content(updated: str) -> None:
+                backend.write_text(path, updated)
+
+            return _str_replace_core(
+                path=path,
+                content=content,
+                old_string=old_string,
+                new_string=new_string,
+                expected_revision=expected_revision,
+                occurrence=occurrence,
+                workspace=workspace,
+                backend=backend,
+                before_snapshot_factory=before_snapshot,
+                write_content=write_content,
+            )
+        except Exception as exc:
+            return f"TOOL ERROR (str_replace)\nType: BackendError\nMessage: {exc}"
+
+    resolved = _resolve_path_for_tool(path, workspace, "str_replace", mounts=mounts)
     if isinstance(resolved, str):
         return resolved
 
-    ro_err = _check_readonly(path, resolved, mounts, "edit_file")
+    ro_err = _check_readonly(path, resolved, mounts, "str_replace")
     if ro_err:
         return ro_err
 
     if not resolved.exists():
-        return f"TOOL ERROR (edit_file)\nType: FileNotFound\nMessage: {path} not found. Use write_file to create."
+        return (
+            "TOOL ERROR (str_replace)\nType: FileNotFound\n"
+            f"Message: {path} not found. Use write_file to create."
+        )
 
     if not _is_text_file(resolved):
         return (
-            f"TOOL ERROR (edit_file)\nType: BinaryFile\n"
-            f"Message: edit_file only works on text files. To modify {resolved.suffix} files, "
+            f"TOOL ERROR (str_replace)\nType: BinaryFile\n"
+            f"Message: str_replace only works on text files. To modify {resolved.suffix} files, "
             f"use execute_python with an appropriate library."
         )
 
     content = resolved.read_text(encoding="utf-8")
-    current_revision = _content_revision(content)
-    if expected_revision != current_revision:
-        return (
-            "TOOL ERROR (edit_file)\n"
-            "Type: StaleRead\n"
-            f"Message: File changed since last read for {path}. "
-            f"Expected revision {expected_revision}, but current revision is {current_revision}. "
-            "Line numbers may have shifted. Call read_file again with show_lines=True and retry with the new revision."
-        )
-    lines = content.split("\n")
-    total = len(lines)
 
-    if start_line < 1:
-        return f"TOOL ERROR (edit_file)\nType: InvalidRange\nMessage: start_line must be >= 1, got {start_line}."
-    if start_line > total:
-        return f"TOOL ERROR (edit_file)\nType: InvalidRange\nMessage: start_line {start_line} exceeds file length ({total} lines)."
-    if start_line > end_line:
-        return f"TOOL ERROR (edit_file)\nType: InvalidRange\nMessage: start_line ({start_line}) > end_line ({end_line})."
+    def before_snapshot() -> _UndoSnapshot:
+        return _capture_local_snapshot(path, resolved)
 
-    clamped_end = min(end_line, total)
-    notice = ""
-    if end_line > total:
-        notice = f" (end_line clamped from {end_line} to {total})"
+    def write_content(updated: str) -> None:
+        resolved.write_text(updated, encoding="utf-8")
 
-    before = _capture_local_snapshot(path, resolved)
-    new_lines = replacement_content.split("\n") if replacement_content else []
-    result_lines = lines[:start_line - 1] + new_lines + lines[clamped_end:]
-    final_content = "\n".join(result_lines)
-    resolved.write_text(final_content, encoding="utf-8")
-    after = _capture_local_snapshot(path, resolved)
-    token = _make_undo_token()
-    _store_undo_record(workspace, backend, _UndoRecord(
-        token=token,
-        operation="edit_file",
-        before=before,
-        after=after,
-    ))
-
-    removed_count = clamped_end - start_line + 1
-    added_count = len(new_lines)
-    net_change = added_count - removed_count
-    return (
-        f"Edited: {path} - replaced lines {start_line}-{clamped_end}.{notice} "
-        f"Removed {removed_count} lines, added {added_count} lines, net change {net_change:+d} lines. "
-        f"New total: {len(result_lines)} lines. "
-        f"Undo token: {token}. "
-        "If you need another edit, call read_file again with show_lines=True to get fresh line numbers and Revision."
+    return _str_replace_core(
+        path=path,
+        content=content,
+        old_string=old_string,
+        new_string=new_string,
+        expected_revision=expected_revision,
+        occurrence=occurrence,
+        workspace=workspace,
+        backend=backend,
+        before_snapshot_factory=before_snapshot,
+        write_content=write_content,
     )
 
 

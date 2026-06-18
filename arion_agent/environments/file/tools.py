@@ -21,11 +21,10 @@ def create_file_tools(workspace: Path, mounts: dict[str, MountSpec] | None = Non
         path: Annotated[str, "File path relative to workspace root."],
         start_line: Annotated[int, "First line to read (1-indexed). Default 1."] = 1,
         end_line: Annotated[int | None, "Last line to read (inclusive). Default: start_line + 200."] = None,
-        show_lines: Annotated[bool, "Add line markers (L1|, L2|, ...) for use with edit_file. Default False."] = False,
+        show_lines: Annotated[bool, "Add line markers (L1|, L2|, ...) for navigation. Default False."] = False,
     ) -> str:
         """Read a file from the workspace. Returns raw content by default.
-Text file reads include a Revision token; pass it to edit_file as expected_revision.
-Use show_lines=True before editing to get line numbers for edit_file.
+Text file reads include a Revision token; pass it to str_replace as expected_revision.
 Handles text, images (multimodal), and binary formats (PDF/docx/xlsx via MarkItDown).
 For files larger than 10 MB, use execute_python or execute_shell instead."""
         return ops.read_file(
@@ -42,29 +41,33 @@ For files larger than 10 MB, use execute_python or execute_shell instead."""
     ) -> str:
         """Create a new file or overwrite/append/prepend to an existing one.
 Creates parent directories automatically. Default mode refuses if file exists;
-use 'overwrite' for full replacement or edit_file for surgical changes.
+use 'overwrite' for full replacement or str_replace for surgical changes.
 Successful overwrite operations return an Undo token for one-step rollback.
 Write one file per turn. For multiple files, split across separate turns."""
         return ops.write_file(path, content, workspace, mode=mode, mounts=mounts)
 
     @tool
-    def edit_file(
+    def str_replace(
         path: Annotated[str, "File path relative to workspace root."],
-        start_line: Annotated[int, "First line to replace (1-indexed, inclusive)."],
-        end_line: Annotated[int, "Last line to replace (1-indexed, inclusive)."],
-        replacement_content: Annotated[str, "Full replacement text for the selected line range. Any original line in the range that is not included here will be removed."],
-        expected_revision: Annotated[str, "Revision token returned by read_file. edit_file rejects stale revisions because line numbers may have shifted."],
+        old_string: Annotated[str, "Exact literal text to find. Must match read_file output exactly, including whitespace."],
+        new_string: Annotated[str, "Replacement text."],
+        expected_revision: Annotated[str, "Revision token returned by read_file."],
+        occurrence: Annotated[str, "Which matches to replace (1-based): default '1' = first only; '3' = third; '1-22' or '3-99' = range; '3-*' = third through last; '*' or 'all' = every match."] = "1",
     ) -> str:
-        """Replace a range of lines in a text file.
-Always read_file with show_lines=True first to get line numbers and the latest Revision token.
-Every line in the selected range is replaced; anything omitted from replacement_content is deleted from that range.
-Include extra context lines around the change to avoid off-by-one errors.
-Only works on text files. For binary files, use execute_python with appropriate libraries.
-Successful edits return an Undo token for one-step rollback.
-Successful edits do not return a fresh Revision token; reread before making another edit.
-If edit_file returns StaleRead, call read_file again before retrying."""
-        return ops.edit_file(
-            path, start_line, end_line, replacement_content, expected_revision, workspace, mounts=mounts,
+        """Replace exact text in a text file.
+Always read_file first and copy old_string literally from that output.
+Use a longer old_string with surrounding context when the target text appears multiple times.
+Default occurrence='1' replaces only the first match. Use '*' to replace all matches.
+Returns a compact preview, fresh Revision token, and Undo token.
+If str_replace returns StaleRead or NotFound, call read_file again before retrying."""
+        return ops.str_replace(
+            path,
+            old_string,
+            new_string,
+            expected_revision,
+            workspace,
+            occurrence=occurrence,
+            mounts=mounts,
         )
 
     @tool
@@ -121,4 +124,4 @@ Use ignore to filter out files/directories matching gitignore-style patterns."""
 delete: move to .recycle_bin/. move: relocate directory. One action per call."""
         return ops.set_directory(action, path, workspace, new_name=new_name, destination=destination, mounts=mounts)
 
-    return [read_file, write_file, edit_file, delete_file, move_file, undo_file_operation, list_files, set_directory]
+    return [read_file, write_file, str_replace, delete_file, move_file, undo_file_operation, list_files, set_directory]

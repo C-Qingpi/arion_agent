@@ -14,9 +14,9 @@ from arion_agent.middleware.base import ArionMiddleware
 FILE_SYSTEM_PROMPT = """## File Environment
 
 You have access to a workspace directory with file tools:
-- read_file: Read files (text, images, PDF/docx/xlsx via extraction). Text reads include a Revision token. Use show_lines=True before editing.
+- read_file: Read files (text, images, PDF/docx/xlsx via extraction). Text reads include a Revision token.
 - write_file: Create new files. Use mode='append' or 'prepend' for existing files.
-- edit_file: Replace line ranges in text files. Always pass the latest Revision token from read_file as expected_revision. replacement_content must contain the full content for the selected range; any omitted line in that range is deleted. Successful edits do not return a fresh Revision token, so reread before another edit. If you get StaleRead, reread first because line numbers may have shifted.
+- str_replace: Replace exact text in text files. Pass expected_revision from read_file. Default occurrence='1' replaces the first match only; use '*' for all matches, or ranges like '1-22' or '3-*'. Returns a fresh Revision token and Undo token.
 - delete_file: Soft delete to .recycle_bin/ (recoverable).
 - move_file: Move or rename files.
 - undo_file_operation: Undo the latest undoable file operation.
