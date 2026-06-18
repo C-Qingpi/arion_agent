@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "description": "Per-platform tmux prefixes (bin/tmux + lib/) from conda-forge. Populated by scripts/vendor_tmux.py.",
+  "platforms": {
+    "darwin-arm64": { "tmux": "bin/tmux", "source": "conda-forge" },
+    "darwin-x86_64": { "tmux": "bin/tmux", "source": "conda-forge" },
+    "linux-x86_64": { "tmux": "bin/tmux", "source": "conda-forge" },
+    "linux-aarch64": { "tmux": "bin/tmux", "source": "conda-forge" }
+  }
+}

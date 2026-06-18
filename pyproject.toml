@@ -1,0 +1,97 @@
+[project]
+name = "arion-agent"
+version = "0.3.0"
+description = "Modular agentic framework with ReAct loop, multi-provider support, persistent sessions, agent identity, summarization, subagenting, skills, and extensible middleware."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12,<3.13"
+keywords = [
+    "agent",
+    "ai",
+    "llm",
+    "langgraph",
+    "langchain",
+    "react",
+    "autonomous",
+    "middleware",
+    "identity",
+    "summarization",
+    "subagent",
+    "skills",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+dependencies = [
+    "langchain-core>=1.2.13,<2.0.0",
+    "langchain>=1.2.10,<2.0.0",
+    "langgraph>=1.0.8,<2.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
+    "aiosqlite>=0.22.0,<1.0.0",
+    "markitdown[all]>=0.1.4,<1.0.0",
+    "croniter>=6.0.0,<7.0.0",
+    "pywinpty>=2.0.13,<4.0.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+openai = [
+    "langchain-openai>=1.1.10,<2.0.0",
+]
+anthropic = [
+    "langchain-anthropic>=1.3.3,<2.0.0",
+]
+google = [
+    "langchain-google-genai>=4.2.0,<5.0.0",
+]
+moonshot = [
+    "langchain-openai>=1.1.10,<2.0.0",
+]
+deepseek = [
+    "langchain-openai>=1.1.10,<2.0.0",
+]
+browser = [
+    "playwright>=1.58.0,<2.0.0",
+    "playwright-stealth>=2.0.0,<3.0.0",
+    "aiohttp>=3.9.0,<4.0.0",
+]
+file-extraction = [
+    "markitdown[all]>=0.1.4,<1.0.0",
+]
+all-providers = [
+    "arion-agent[openai,anthropic,google,moonshot,deepseek]",
+]
+all = [
+    "arion-agent[all-providers,browser,file-extraction]",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.2.0",
+    "python-dotenv>=1.0.0",
+    "langchain-openai>=1.1.10",
+    "langchain-anthropic>=1.3.3",
+    "langchain-google-genai>=4.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["arion_agent", "arion_agent.*"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
