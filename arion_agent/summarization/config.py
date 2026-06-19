@@ -70,13 +70,13 @@ class SummarizationConfig:
 
     policy: SummarizationPolicy | Callable[..., "PolicyDecision | None"] | None = None
     prefetch_policy: Callable[..., "PolicyDecision | None"] | None = None
-    max_tokens: int | None = None
     summary_prompt: str | None = None
     summary_budget: int | None = None
     arg_truncation_trigger: int | None = None
     arg_truncation_keep: int | None = None
     arg_max_length: int | None = None
     is_perpetual: bool = False
+    max_tokens: int | None = None
 
 @runtime_checkable
 class PolicyCallable(Protocol):

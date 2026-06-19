@@ -224,6 +224,7 @@ def configure_compression(
         arg_truncation_trigger = None
         arg_truncation_keep = None
         arg_max_length = None
+        max_tokens = None
     elif hasattr(summarization, "policy"):
         policy = getattr(summarization, "policy", None) or STANDARD_POLICY
         summary_model_spec = None
@@ -233,6 +234,7 @@ def configure_compression(
         arg_truncation_trigger = getattr(summarization, "arg_truncation_trigger", None)
         arg_truncation_keep = getattr(summarization, "arg_truncation_keep", None)
         arg_max_length = getattr(summarization, "arg_max_length", None)
+        max_tokens = getattr(summarization, "max_tokens", None)
     else:
         policy = STANDARD_POLICY
         summary_model_spec = None
@@ -242,6 +244,7 @@ def configure_compression(
         arg_truncation_trigger = None
         arg_truncation_keep = None
         arg_max_length = None
+        max_tokens = None
 
     summary_model = summary_model_spec or resolve_model(
         ctx.default_model_spec, **ctx.extra_model_kwargs
@@ -260,10 +263,6 @@ def configure_compression(
         prefetch_policy = getattr(summarization, "prefetch_policy", None)
     elif policy is STANDARD_POLICY or summarization is None:
         prefetch_policy = STANDARD_PREFETCH_POLICY
-
-    max_tokens: int | None = None
-    if hasattr(summarization, "max_tokens"):
-        max_tokens = summarization.max_tokens
 
     registry = PrefetchRegistry()
     compress_kwargs_shared: dict[str, Any] = {
