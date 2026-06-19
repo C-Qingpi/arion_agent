@@ -224,6 +224,7 @@ def configure_compression(
         arg_truncation_trigger = None
         arg_truncation_keep = None
         arg_max_length = None
+        max_tokens = None
     elif hasattr(summarization, "policy"):
         policy = getattr(summarization, "policy", None) or STANDARD_POLICY
         summary_model_spec = None
@@ -233,6 +234,7 @@ def configure_compression(
         arg_truncation_trigger = getattr(summarization, "arg_truncation_trigger", None)
         arg_truncation_keep = getattr(summarization, "arg_truncation_keep", None)
         arg_max_length = getattr(summarization, "arg_max_length", None)
+        max_tokens = getattr(summarization, "max_tokens", None)
     else:
         policy = STANDARD_POLICY
         summary_model_spec = None
@@ -242,6 +244,7 @@ def configure_compression(
         arg_truncation_trigger = None
         arg_truncation_keep = None
         arg_max_length = None
+        max_tokens = None
 
     summary_model = summary_model_spec or resolve_model(
         ctx.default_model_spec, **ctx.extra_model_kwargs
@@ -265,7 +268,7 @@ def configure_compression(
     compress_kwargs_shared: dict[str, Any] = {
         "history_dir": ctx.identity_dir,
         "workspace_dir": ctx.workspace_dir,
-        "max_tokens": None,
+        "max_tokens": max_tokens,
         "is_perpetual": is_perpetual,
         "abort_check": abort_check,
         "cutoff_fn": cutoff_fn,
@@ -278,7 +281,7 @@ def configure_compression(
         compress_kwargs_shared["arg_max_length"] = arg_max_length
 
     route_compression = make_route_compression(
-        policy, max_tokens=None, prefetch_policy=prefetch_policy,
+        policy, max_tokens=max_tokens, prefetch_policy=prefetch_policy,
     )
     prefetch_node = make_prefetch_node(
         policy,

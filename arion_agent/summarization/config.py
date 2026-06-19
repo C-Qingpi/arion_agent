@@ -76,6 +76,7 @@ class SummarizationConfig:
     arg_truncation_keep: int | None = None
     arg_max_length: int | None = None
     is_perpetual: bool = False
+    max_tokens: int | None = None
 
 @runtime_checkable
 class PolicyCallable(Protocol):
