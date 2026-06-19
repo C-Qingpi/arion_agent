@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from arion_agent.semantic_search.chunker import chunk_file
 from arion_agent.semantic_search.config import (
-    INDEX_CHUNK_WORKERS,
     INCREMENTAL_BATCH_FILES,
     TEXT_EXTENSIONS,
     Chunk,
@@ -198,6 +196,57 @@ def _vector_cache_from_store(store: ChunkStore) -> dict[str, list[float]]:
     return cache
 
 
+def _index_one_file(
+    path: Path,
+    workspace: Path,
+    *,
+    store: ChunkStore | None,
+    vector_cache: dict[str, list[float]],
+    embedder,
+    persist: bool,
+) -> tuple[int, int, list[Chunk], list[list[float]], str | None]:
+    """Chunk, prepare, embed, and persist a single file. Returns (embedded, reused, chunks, vectors, rel)."""
+    rel = path.relative_to(workspace).as_posix()
+    raw_chunks = _chunk_one(path, workspace)
+    if not raw_chunks:
+        if persist and store is not None:
+            store.delete_by_path(rel)
+            store.remove_manifest_entries([rel])
+        return 0, 0, [], [], None
+
+    file_chunks = _prepare_chunks(raw_chunks)
+    need_embed: list[Chunk] = []
+    need_embed_indices: list[int] = []
+    vectors: list[list[float] | None] = [None] * len(file_chunks)
+    chunks_reused = 0
+
+    for i, chunk in enumerate(file_chunks):
+        cached = vector_cache.get(chunk.search_text_hash)
+        if cached is not None:
+            vectors[i] = cached
+            chunks_reused += 1
+        else:
+            need_embed.append(chunk)
+            need_embed_indices.append(i)
+
+    chunks_embedded = 0
+    if need_embed:
+        new_vectors = embedder.embed_documents([c.search_text for c in need_embed])
+        for chunk, vector, idx in zip(
+            need_embed, new_vectors, need_embed_indices, strict=True
+        ):
+            vectors[idx] = vector
+            vector_cache[chunk.search_text_hash] = vector
+            chunks_embedded += 1
+
+    resolved = [v for v in vectors if v is not None]
+    if persist and store is not None:
+        store.upsert_file(file_chunks, resolved)
+        store.update_manifest_entries({rel: file_content_hash(path)})
+
+    return chunks_embedded, chunks_reused, file_chunks, resolved, rel
+
+
 def index_file_batch(
     paths: list[Path],
     workspace: Path,
@@ -217,17 +266,6 @@ def index_file_batch(
     if vector_cache is None:
         vector_cache = {}
 
-    raw_chunks: list[Chunk] = []
-    with ThreadPoolExecutor(max_workers=INDEX_CHUNK_WORKERS) as pool:
-        for chunks in pool.map(lambda p: _chunk_one(p, workspace), paths):
-            raw_chunks.extend(chunks)
-
-    prepared = _prepare_chunks(raw_chunks)
-
-    by_path: dict[str, list[Chunk]] = {}
-    for chunk in prepared:
-        by_path.setdefault(chunk.path, []).append(chunk)
-
     embedder = get_embedder()
     files_indexed = 0
     chunks_embedded = 0
@@ -237,45 +275,22 @@ def index_file_batch(
     batch_vectors: list[list[float]] = []
 
     for path in paths:
-        rel = path.relative_to(workspace).as_posix()
-        file_chunks = by_path.get(rel, [])
-        if not file_chunks:
-            if persist and store is not None:
-                store.delete_by_path(rel)
-                store.remove_manifest_entries([rel])
+        embedded, reused, file_chunks, resolved, rel = _index_one_file(
+            path,
+            workspace,
+            store=store,
+            vector_cache=vector_cache,
+            embedder=embedder,
+            persist=persist,
+        )
+        if rel is None:
             continue
-
-        need_embed: list[Chunk] = []
-        need_embed_indices: list[int] = []
-        vectors: list[list[float] | None] = [None] * len(file_chunks)
-
-        for i, chunk in enumerate(file_chunks):
-            cached = vector_cache.get(chunk.search_text_hash)
-            if cached is not None:
-                vectors[i] = cached
-                chunks_reused += 1
-            else:
-                need_embed.append(chunk)
-                need_embed_indices.append(i)
-
-        if need_embed:
-            new_vectors = embedder.embed_documents([c.search_text for c in need_embed])
-            for chunk, vector, idx in zip(
-                need_embed, new_vectors, need_embed_indices, strict=True
-            ):
-                vectors[idx] = vector
-                vector_cache[chunk.search_text_hash] = vector
-                chunks_embedded += 1
-
-        resolved = [v for v in vectors if v is not None]
+        chunks_embedded += embedded
+        chunks_reused += reused
         batch_chunks.extend(file_chunks)
         batch_vectors.extend(resolved)
         manifest_entries[rel] = file_content_hash(path)
         files_indexed += 1
-
-        if persist and store is not None:
-            store.upsert_file(file_chunks, resolved)
-            store.update_manifest_entries({rel: manifest_entries[rel]})
 
     stats = BatchIndexStats(
         files_indexed=files_indexed,

@@ -61,3 +61,32 @@ def test_indexer_survives_agent_turns(search_ws: Path) -> None:
     assert st2.indexed_files >= first_count
 
     env.service.stop()
+
+
+def test_indexer_restarts_after_thread_death(search_ws: Path) -> None:
+    from arion_agent.environments.search.middleware import SearchEnvironment
+
+    env = SearchEnvironment(search_ws, system_prompt=False)
+    tool = env.tools[0]
+    env.before_agent({})
+
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if env.service.status().indexed_files > 0:
+            break
+        time.sleep(0.25)
+
+    indexer = env.service._indexer
+    indexer._initial_sync_done = True
+    indexer._running = False
+    if indexer._thread is not None:
+        indexer._thread.join(timeout=5)
+    assert not env.service.status().thread_alive
+
+    out = tool.invoke({"query": "lunar relay Nebula"})
+    st = env.service.status()
+    assert st.thread_alive, "semantic_search must restart dead indexer"
+    assert st.indexed_files > 0, f"expected re-index after restart, got {st}"
+    assert "Nebula" in out or "alpha.md" in out or "hits" in out, out[:200]
+
+    env.service.stop()

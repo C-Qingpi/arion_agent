@@ -88,9 +88,14 @@ class IncrementalIndexer:
     def ensure_running(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        thread_was_dead = self._thread is not None and not self._thread.is_alive()
         self._clear_queue()
         with self._lock:
             self._pending.clear()
+        manifest = self._store.load_manifest()
+        disk_manifest = scan_manifest(self._workspace, self._patterns)
+        if thread_was_dead and len(manifest) < len(disk_manifest):
+            self._initial_sync_done = False
         self._running = True
         self._last_error = None
         self._vector_cache = {
@@ -190,8 +195,12 @@ class IncrementalIndexer:
             batch = self._drain_batch()
             if batch:
                 self._index_batch(batch)
-            else:
+                continue
+            with self._lock:
+                still_pending = len(self._pending) + self._queue.qsize()
+            if still_pending == 0:
                 break
+            time.sleep(0.1)
 
         self._initial_sync_done = True
 

@@ -104,6 +104,10 @@ def translate_zh_to_en(text: str) -> str:
     return "".join(out)
 
 
+def warmup_mt() -> None:
+    _load_mt()
+
+
 def prepare_search_text(text: str) -> str:
     if not needs_translation(text):
         return text

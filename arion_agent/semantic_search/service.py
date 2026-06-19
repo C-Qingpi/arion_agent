@@ -6,6 +6,12 @@ from pathlib import Path
 
 from arion_agent.semantic_search.config import EMBEDDER_WARMUP, FINAL_TOP_K, MIN_HYBRID_SCORE, resolve_index_dir
 from arion_agent.semantic_search.embedder import get_embedder
+from arion_agent.semantic_search.translate import warmup_mt
+
+
+def _warmup_models() -> None:
+    get_embedder()
+    warmup_mt()
 from arion_agent.semantic_search.incremental import IncrementalIndexer, IndexerStatus
 from arion_agent.semantic_search.ignore import load_ignore_patterns
 from arion_agent.semantic_search.retriever import SearchResult, hybrid_search
@@ -60,8 +66,8 @@ class SearchService:
     def start(self) -> None:
         if self._config.warmup_embedder and self._warmup_thread is None:
             self._warmup_thread = threading.Thread(
-                target=get_embedder,
-                name="embedder-warmup",
+                target=_warmup_models,
+                name="search-model-warmup",
                 daemon=True,
             )
             self._warmup_thread.start()

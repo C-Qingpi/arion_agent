@@ -51,6 +51,22 @@ def format_empty_search_message(st: IndexerStatus) -> str:
     return "No results."
 
 
+def _format_hits(results, st: IndexerStatus | None) -> str:
+    lines = [f"({len(results)} hits)"]
+    if st is not None and not st.initial_sync_done and st.indexed_files < st.total_files:
+        lines.append(
+            f"\n[index partial: {st.indexed_files}/{st.total_files} files indexed; "
+            "more results may appear as indexing continues]"
+        )
+    for i, hit in enumerate(results, start=1):
+        lines.append(
+            f"\n--- [{i}] score={hit.score:.3f} ---\n"
+            f"{hit.path}:{hit.start_line}-{hit.end_line} [{hit.kind}]\n"
+            f"{hit.snippet}"
+        )
+    return "".join(lines)
+
+
 def create_search_tools(service: SearchService, *, min_score: float, default_num_results: int) -> list:
     @tool
     def semantic_search(
@@ -67,22 +83,26 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
         background; results improve as more files are indexed.
         """
         capped = max(1, min(num_results, 25))
-        results = service.search(
-            query,
-            target_directories=target_directories or None,
-            num_results=capped,
-            min_score=min_score,
-        )
-        if not results:
-            return format_empty_search_message(service.status())
+        service.start()
 
-        lines = [f"({len(results)} hits)"]
-        for i, hit in enumerate(results, start=1):
-            lines.append(
-                f"\n--- [{i}] score={hit.score:.3f} ---\n"
-                f"{hit.path}:{hit.start_line}-{hit.end_line} [{hit.kind}]\n"
-                f"{hit.snippet}"
+        def _run_search():
+            return service.search(
+                query,
+                target_directories=target_directories or None,
+                num_results=capped,
+                min_score=min_score,
             )
-        return "".join(lines)
+
+        results = _run_search()
+        st = service.status()
+        if not results and not st.thread_alive and st.indexed_files < st.total_files:
+            service.start()
+            results = _run_search()
+            st = service.status()
+
+        if not results:
+            return format_empty_search_message(st)
+
+        return _format_hits(results, st)
 
     return [semantic_search]

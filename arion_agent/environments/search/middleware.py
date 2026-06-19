@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from langchain_core.tools import BaseTool
 
@@ -16,14 +16,16 @@ SEARCH_SYSTEM_PROMPT = """\
 You have semantic_search to find workspace content by meaning, not exact keywords.
 Use it to locate relevant specs, docs, and code before reading files in depth.
 Pass target_directories to narrow scope when you know the area (e.g. ["docs"]).
-Indexing runs in the background when the agent starts. First run on a new
-workspace can take minutes while models load; the tool reports startup status.
-Early queries may return partial results until indexing completes.
+Indexing starts when the agent runner starts (dev mode). First file on a new
+workspace is searchable soon after; CJK translation model load can add minutes
+on the first Chinese-heavy file only.
 </semantic_search>"""
 
 
 class SearchEnvironment(ArionMiddleware):
     """Optional middleware: background-indexed hybrid semantic search."""
+
+    _services: ClassVar[dict[str, Any]] = {}
 
     def __init__(
         self,
@@ -47,16 +49,22 @@ class SearchEnvironment(ArionMiddleware):
         if service is not None:
             self._service = service
         else:
-            self._service = SearchService(
-                self._workspace,
-                self._config.index_dir,
-                config=SearchServiceConfig(
-                    batch_size=self._config.batch_size,
-                    extra_ignore=self._config.extra_ignore,
-                    warmup_embedder=self._config.warmup_embedder,
-                    enable_watcher=self._config.enable_watcher,
-                ),
-            )
+            key = str(self._workspace)
+            existing = SearchEnvironment._services.get(key)
+            if existing is not None:
+                self._service = existing
+            else:
+                self._service = SearchService(
+                    self._workspace,
+                    self._config.index_dir,
+                    config=SearchServiceConfig(
+                        batch_size=self._config.batch_size,
+                        extra_ignore=self._config.extra_ignore,
+                        warmup_embedder=self._config.warmup_embedder,
+                        enable_watcher=self._config.enable_watcher,
+                    ),
+                )
+                SearchEnvironment._services[key] = self._service
 
         self._tools = create_search_tools(
             self._service,
