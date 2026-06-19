@@ -379,6 +379,30 @@ print(agent.stats.summary())     # model calls, tool calls, tokens
 
 **Browser** (10, optional): browser_action, browser_snapshot, browser_screenshot, browser_wait_for_human, browser_console, browser_eval_js, http_request, browser_status, browser_reconnect, browser_close
 
+**Search** (1, optional): semantic_search
+
+## Search Environment (optional)
+
+Background-indexed hybrid semantic search over the workspace. Indexing starts when the agent starts; the tool is available immediately and improves as more files are indexed.
+
+```python
+from arion_agent.environments.search import SearchEnvironment, SearchConfig
+
+search = SearchEnvironment(
+    workspace_dir="./workspace",
+    config=SearchConfig(num_results=10),
+)
+
+agent = create_arion_agent(
+    ...,
+    middleware=[search],
+)
+```
+
+Requires: `pip install arion-agent[search]`
+
+Index storage: `{workspace}/.arion/index/` (LanceDB + manifest). A workspace watcher re-indexes on file changes; renames update paths without re-embedding when content is unchanged.
+
 ## Browser Environment (Phase 8, optional)
 
 ```python
