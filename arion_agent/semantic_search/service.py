@@ -13,7 +13,7 @@ def _warmup_models() -> None:
     get_embedder()
     warmup_mt()
 from arion_agent.semantic_search.incremental import IncrementalIndexer, IndexerStatus
-from arion_agent.semantic_search.ignore import load_ignore_patterns
+from arion_agent.semantic_search.scope import resolve_index_scope
 from arion_agent.semantic_search.retriever import SearchResult, hybrid_search
 from arion_agent.semantic_search.store import ChunkStore
 from arion_agent.semantic_search.watcher import WorkspaceWatcher
@@ -64,6 +64,10 @@ class SearchService:
         return self._store
 
     def start(self) -> None:
+        from arion_agent.semantic_search.scope import ensure_index_config_files
+
+        ensure_index_config_files(self._workspace)
+
         if self._config.warmup_embedder and self._warmup_thread is None:
             self._warmup_thread = threading.Thread(
                 target=_warmup_models,
@@ -100,6 +104,7 @@ class SearchService:
         query: str,
         *,
         target_directories: list[str] | None = None,
+        path_glob: str | None = None,
         num_results: int = FINAL_TOP_K,
         min_score: float = MIN_HYBRID_SCORE,
     ) -> list[SearchResult]:
@@ -108,12 +113,17 @@ class SearchService:
             index_dir=self._index_dir,
             store=self._store,
             target_directories=target_directories,
+            path_glob=path_glob,
             num_results=num_results,
             min_score=min_score,
         )
 
+    def reset_index(self) -> None:
+        self.start()
+        self._indexer.reset_and_resync()
+
     def ignore_patterns(self) -> list[str]:
-        return load_ignore_patterns(
+        return resolve_index_scope(
             self._workspace,
-            extra_patterns=self._config.extra_ignore,
-        )
+            extra_ignore=self._config.extra_ignore,
+        ).patterns

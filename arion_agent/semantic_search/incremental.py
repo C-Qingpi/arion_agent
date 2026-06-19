@@ -16,7 +16,11 @@ from arion_agent.semantic_search.indexer import (
     plan_sync,
     scan_manifest,
 )
-from arion_agent.semantic_search.ignore import load_ignore_patterns
+from arion_agent.semantic_search.scope import (
+    is_search_config_rel,
+    resolve_index_scope,
+    search_config_mtime,
+)
 from arion_agent.semantic_search.store import ChunkStore
 
 
@@ -49,10 +53,9 @@ class IncrementalIndexer:
         self._workspace = workspace.resolve()
         self._store = store
         self._batch_size = batch_size
-        self._patterns = load_ignore_patterns(
-            self._workspace,
-            extra_patterns=extra_ignore,
-        )
+        self._extra_ignore = extra_ignore
+        self._index_scope = resolve_index_scope(self._workspace, extra_ignore=extra_ignore)
+        self._scope_mtime = search_config_mtime(self._workspace)
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._pending: set[str] = set()
         self._lock = threading.Lock()
@@ -66,11 +69,13 @@ class IncrementalIndexer:
 
     @property
     def status(self) -> IndexerStatus:
+        if self._maybe_reload_scope():
+            self._request_resync()
         with self._lock:
             pending = len(self._pending) + self._queue.qsize()
         thread_alive = self._thread is not None and self._thread.is_alive()
         manifest = self._store.load_manifest()
-        disk_manifest = scan_manifest(self._workspace, self._patterns)
+        disk_manifest = scan_manifest(self._workspace, self._index_scope)
         return IndexerStatus(
             running=thread_alive,
             thread_alive=thread_alive,
@@ -93,7 +98,7 @@ class IncrementalIndexer:
         with self._lock:
             self._pending.clear()
         manifest = self._store.load_manifest()
-        disk_manifest = scan_manifest(self._workspace, self._patterns)
+        disk_manifest = scan_manifest(self._workspace, self._index_scope)
         if thread_was_dead and len(manifest) < len(disk_manifest):
             self._initial_sync_done = False
         self._running = True
@@ -122,6 +127,11 @@ class IncrementalIndexer:
                     self._queue.put(rel)
 
     def handle_watcher_batch(self, rel_paths: set[str]) -> None:
+        if any(is_search_config_rel(rel) for rel in rel_paths):
+            self._maybe_reload_scope()
+            self._request_resync()
+            return
+
         deletions = {
             rel[len("__deleted__:"):]
             for rel in rel_paths
@@ -151,6 +161,38 @@ class IncrementalIndexer:
         if updates:
             self.request_paths(updates)
 
+    def reset_and_resync(self) -> None:
+        self._store.clear()
+        self._index_scope = resolve_index_scope(
+            self._workspace,
+            extra_ignore=self._extra_ignore,
+        )
+        self._scope_mtime = search_config_mtime(self._workspace)
+        self._initial_sync_done = False
+        self._vector_cache.clear()
+        self._last_error = None
+        self._clear_queue()
+        with self._lock:
+            self._pending.clear()
+        self.ensure_running()
+
+    def _maybe_reload_scope(self) -> bool:
+        mtime = search_config_mtime(self._workspace)
+        if mtime == self._scope_mtime:
+            return False
+        self._index_scope = resolve_index_scope(
+            self._workspace,
+            extra_ignore=self._extra_ignore,
+        )
+        self._scope_mtime = mtime
+        return True
+
+    def _request_resync(self) -> None:
+        self._initial_sync_done = False
+        self._clear_queue()
+        with self._lock:
+            self._pending.clear()
+
     def _clear_queue(self) -> None:
         while True:
             try:
@@ -160,9 +202,11 @@ class IncrementalIndexer:
 
     def _run(self) -> None:
         try:
-            if not self._initial_sync_done:
-                self._bootstrap_sync()
             while self._running:
+                if self._maybe_reload_scope():
+                    self._request_resync()
+                if not self._initial_sync_done:
+                    self._bootstrap_sync()
                 batch = self._drain_batch()
                 if batch:
                     self._index_batch(batch)
@@ -177,7 +221,7 @@ class IncrementalIndexer:
 
     def _bootstrap_sync(self) -> None:
         manifest = self._store.load_manifest()
-        sync = plan_sync(self._workspace, manifest, self._patterns)
+        sync = plan_sync(self._workspace, manifest, self._index_scope)
 
         if sync.renames:
             apply_renames(self._store, sync.renames)

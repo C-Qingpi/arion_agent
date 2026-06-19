@@ -34,7 +34,7 @@ def main() -> int:
     print("=== E2E: runner-style warmup + agent turn ===")
     t0 = time.perf_counter()
 
-    # Same as _warm_dev_search_indexers() + before_agent
+    # Same as _warm_search_indexers() + before_agent
     env = SearchEnvironment(ws, system_prompt=False)
     env.before_agent({})
     tool = env.tools[0]

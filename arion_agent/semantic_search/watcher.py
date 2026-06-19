@@ -10,6 +10,7 @@ from watchdog.observers import Observer
 
 from arion_agent.semantic_search.config import TEXT_EXTENSIONS, WATCHER_DEBOUNCE_SEC
 from arion_agent.semantic_search.ignore import load_ignore_patterns, should_ignore
+from arion_agent.semantic_search.scope import is_search_config_rel
 
 
 class _DebouncedHandler(FileSystemEventHandler):
@@ -36,7 +37,7 @@ class _DebouncedHandler(FileSystemEventHandler):
             rel = raw.resolve().relative_to(self._workspace).as_posix()
         except ValueError:
             return None
-        if should_ignore(rel, self._patterns):
+        if should_ignore(rel, self._patterns) and not is_search_config_rel(rel):
             return None
         return rel
 
@@ -50,7 +51,7 @@ class _DebouncedHandler(FileSystemEventHandler):
             rel = raw.resolve().relative_to(self._workspace).as_posix()
         except ValueError:
             return None
-        if should_ignore(rel, self._patterns):
+        if should_ignore(rel, self._patterns) and not is_search_config_rel(rel):
             return None
         if raw.is_file() and raw.suffix.lower() not in TEXT_EXTENSIONS:
             return None

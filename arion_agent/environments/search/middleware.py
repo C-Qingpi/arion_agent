@@ -14,11 +14,28 @@ from arion_agent.middleware.base import ArionMiddleware
 SEARCH_SYSTEM_PROMPT = """\
 <semantic_search>
 You have semantic_search to find workspace content by meaning, not exact keywords.
-Use it to locate relevant specs, docs, and code before reading files in depth.
-Pass target_directories to narrow scope when you know the area (e.g. ["docs"]).
-Indexing starts when the agent runner starts (dev mode). First file on a new
-workspace is searchable soon after; CJK translation model load can add minutes
-on the first Chinese-heavy file only.
+Use list_files with depth=2-3 first to orient, then search narrowly.
+Always pass target_directories and/or path_glob (e.g. "**/*.py", "docs/**") on each query.
+
+Indexing scope is configured in .arion/search.json (create or edit with write_file).
+The file supports // line comments; a commented template is created on first index start.
+.searchignore (same folder level as workspace root) adds gitignore-style exclusions with # comments.
+All pattern fields use workspace-relative globs with ** support. Precedence: skip > only > factory defaults.
+
+  max_depth — max directory nesting to walk (default 12)
+  skip — never index paths matching these globs (extra blacklist)
+  only — when non-empty, index only paths matching at least one glob (whitelist filter)
+  allow — index paths even when factory/.searchignore would skip them (override blacklist)
+
+Examples:
+  Default workspace minus one heavy folder: {"skip":["my_backup/**"]}
+  Only src and docs: {"only":["src/**","docs/**"]}
+  Docs plus tests excluded: {"only":["src/**"],"skip":["src/**/test_*.py"]}
+  One analysis file type inside a factory-skipped tree:
+    {"allow":["final_exam_standalone/**"],"only":["final_exam_standalone/**/*analysis.md"]}
+
+Factory defaults skip .venv, node_modules, .uv, site-packages, deploy checkouts, and build artifacts.
+After editing .arion/search.json the indexer rescans automatically.
 </semantic_search>"""
 
 
@@ -71,6 +88,19 @@ class SearchEnvironment(ArionMiddleware):
             min_score=self._config.min_score,
             default_num_results=self._config.num_results,
         )
+
+    @classmethod
+    def reset_index_for_workspace(cls, workspace_dir: str | Path) -> None:
+        from arion_agent.semantic_search.config import resolve_index_dir
+        from arion_agent.semantic_search.store import ChunkStore
+
+        workspace = Path(workspace_dir).resolve()
+        key = str(workspace)
+        existing = cls._services.get(key)
+        if existing is not None:
+            existing.reset_index()
+            return
+        ChunkStore(resolve_index_dir(workspace)).clear()
 
     @property
     def service(self) -> Any:

@@ -60,6 +60,12 @@ class ChunkStore:
             "vector": vector,
         }
 
+    def clear(self) -> None:
+        with self._lock:
+            if TABLE_NAME in self.db.table_names():
+                self.db.drop_table(TABLE_NAME)
+            self.save_manifest({})
+
     def replace_all(self, chunks: list[Chunk], vectors: list[list[float]]) -> None:
         with self._lock:
             rows = [

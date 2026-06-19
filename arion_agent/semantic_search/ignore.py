@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # Baked-in ignores for workspaces outside git repos (Desktop, temp folders, etc.)
 DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
@@ -10,17 +10,24 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     ".git/",
     ".svn/",
     ".hg/",
-    # Python
+    # Python / uv / pip
     "__pycache__/",
     "*.py[cod]",
     ".venv/",
     "venv/",
     ".wsl_test_venv/",
     "site-packages/",
+    ".uv/",
     ".mypy_cache/",
     ".ruff_cache/",
     ".pytest_cache/",
+    ".tox/",
+    ".nox/",
     "*.egg-info/",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
     # Node / front-end build
     "node_modules/",
     "dist/",
@@ -30,6 +37,12 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     ".turbo/",
     "coverage/",
     ".parcel-cache/",
+    ".pnpm-store/",
+    ".yarn/",
+    "bower_components/",
+    # Rust / Go / Java build
+    "target/",
+    "vendor/",
     # IDE / editor
     ".idea/",
     ".vscode/",
@@ -38,9 +51,15 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     ".DS_Store",
     "Thumbs.db",
     "desktop.ini",
-    # Index storage (never index the index)
+    "__MACOSX/",
+    ".Trash/",
+    # Index / agent runtime (never index the index)
     ".arion/",
     ".index/",
+    ".run/",
+    ".cache/",
+    ".recycle_bin/",
+    ".zsh_sessions/",
     # Secrets / credentials
     ".env",
     ".env.*",
@@ -52,7 +71,7 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "*.log",
     "*.err",
     "*.pid",
-    # Large / binary media
+    # Large / binary / model artifacts
     "*.zip",
     "*.tar",
     "*.gz",
@@ -73,6 +92,18 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "*.dll",
     "*.so",
     "*.dylib",
+    "*.whl",
+    "*.sqlite",
+    "*.db",
+    "*.pkl",
+    "*.pickle",
+    "*.npy",
+    "*.npz",
+    "*.h5",
+    "*.pt",
+    "*.pth",
+    "*.onnx",
+    "*.bin",
     # Minified / generated bundles
     "*.min.js",
     "*.min.css",
@@ -80,6 +111,12 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "package-lock.json",
     "pnpm-lock.yaml",
     "yarn.lock",
+    # Common Desktop deploy checkouts (Mac: workspace = ~/Desktop)
+    "ArionAgentProd/",
+    "ArionAgentDev/",
+    # Large standalone trees observed on user Desktop
+    "final_exam_standalone/",
+    "to_be_deleted/",
 )
 
 
@@ -142,37 +179,85 @@ def _ignore_dirname(name: str, parent_rel: str, patterns: list[str]) -> bool:
     return should_ignore(rel, patterns)
 
 
+def _rel_depth(rel_dir: str) -> int:
+    if not rel_dir or rel_dir == ".":
+        return 0
+    return len(rel_dir.split("/"))
+
+
 def iter_indexable_files(
     workspace: Path,
     patterns: list[str],
     extensions: set[str],
+    *,
+    max_depth: int | None = None,
+    only: tuple[str, ...] = (),
+    skip: tuple[str, ...] = (),
+    allow: tuple[str, ...] = (),
 ) -> list[Path]:
+    from arion_agent.semantic_search.scope import (
+        path_indexable,
+        should_prune_directory,
+        walk_roots,
+    )
+
     files: list[Path] = []
-    root = str(workspace)
+    workspace = workspace.resolve()
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        rel_dir = Path(dirpath).relative_to(workspace).as_posix()
-        if rel_dir == ".":
-            rel_dir = ""
+    for walk_root in walk_roots(workspace, only=only, allow=allow):
+        for dirpath, dirnames, filenames in os.walk(str(walk_root), followlinks=False):
+            rel_dir = Path(dirpath).relative_to(workspace).as_posix()
+            if rel_dir == ".":
+                rel_dir = ""
 
-        dirnames[:] = [
-            d for d in dirnames
-            if not _ignore_dirname(d, rel_dir, patterns)
-        ]
+            if max_depth is not None and _rel_depth(rel_dir) >= max_depth:
+                dirnames.clear()
+                continue
 
-        for name in filenames:
-            rel = name if not rel_dir else f"{rel_dir}/{name}"
-            if should_ignore(rel, patterns):
-                continue
-            path = Path(dirpath) / name
-            if path.suffix.lower() not in extensions:
-                continue
-            if _looks_binary(path):
-                continue
-            files.append(path)
+            dirnames[:] = [
+                d for d in dirnames
+                if not should_prune_directory(
+                    f"{rel_dir}/{d}" if rel_dir else d,
+                    patterns,
+                    only=only,
+                    skip=skip,
+                    allow=allow,
+                )
+            ]
+
+            for name in filenames:
+                path = Path(dirpath) / name
+                rel = path.relative_to(workspace).as_posix()
+                if not path_indexable(
+                    rel,
+                    patterns,
+                    only=only,
+                    skip=skip,
+                    allow=allow,
+                ):
+                    continue
+                if path.suffix.lower() not in extensions:
+                    continue
+                if _looks_binary(path):
+                    continue
+                files.append(path)
 
     files.sort()
     return files
+
+
+def path_matches_glob(path: str, glob_pattern: str) -> bool:
+    """Match workspace-relative path against a glob (supports **)."""
+    norm = path.replace("\\", "/")
+    pattern = glob_pattern.replace("\\", "/").strip()
+    if not pattern:
+        return True
+    if pattern.endswith("/**"):
+        prefix = pattern[:-3].strip("/")
+        return norm == prefix or norm.startswith(prefix + "/")
+    if "**" in pattern:
+        return PurePosixPath(norm).match(pattern)
+    return fnmatch.fnmatch(norm, pattern)
 
 
 def _looks_binary(path: Path) -> bool:

@@ -13,7 +13,8 @@ from arion_agent.semantic_search.config import (
     resolve_index_dir,
 )
 from arion_agent.semantic_search.embedder import get_embedder
-from arion_agent.semantic_search.ignore import iter_indexable_files, load_ignore_patterns
+from arion_agent.semantic_search.ignore import iter_indexable_files
+from arion_agent.semantic_search.scope import IndexScope, resolve_index_scope
 from arion_agent.semantic_search.store import ChunkStore
 from arion_agent.semantic_search.translate import prepare_search_text
 
@@ -61,12 +62,20 @@ def file_content_hash(path: Path) -> str:
 
 def scan_manifest(
     workspace: Path,
-    patterns: list[str] | None = None,
+    index_scope: IndexScope | None = None,
 ) -> dict[str, str]:
     workspace = workspace.resolve()
-    if patterns is None:
-        patterns = load_ignore_patterns(workspace)
-    files = iter_indexable_files(workspace, patterns, TEXT_EXTENSIONS)
+    if index_scope is None:
+        index_scope = resolve_index_scope(workspace)
+    files = iter_indexable_files(
+        workspace,
+        index_scope.patterns,
+        TEXT_EXTENSIONS,
+        max_depth=index_scope.max_depth,
+        only=index_scope.only,
+        skip=index_scope.skip,
+        allow=index_scope.allow,
+    )
     return {
         path.relative_to(workspace).as_posix(): file_content_hash(path)
         for path in files
@@ -96,10 +105,10 @@ def detect_renames(
 def plan_sync(
     workspace: Path,
     old_manifest: dict[str, str],
-    patterns: list[str] | None = None,
+    index_scope: IndexScope | None = None,
 ) -> SyncPlan:
     workspace = workspace.resolve()
-    new_manifest = scan_manifest(workspace, patterns)
+    new_manifest = scan_manifest(workspace, index_scope)
     renames = detect_renames(old_manifest, new_manifest)
 
     renamed_old = {old for old, _ in renames}
@@ -306,17 +315,17 @@ def index_workspace(
     index_dir: Path | None = None,
     *,
     force: bool = False,
-    patterns: list[str] | None = None,
+    index_scope: IndexScope | None = None,
 ) -> IndexStats:
     started = time.perf_counter()
     workspace = workspace.resolve()
     index_dir = resolve_index_dir(workspace, index_dir)
-    if patterns is None:
-        patterns = load_ignore_patterns(workspace)
+    if index_scope is None:
+        index_scope = resolve_index_scope(workspace)
 
     store = ChunkStore(index_dir)
     old_manifest = {} if force else store.load_manifest()
-    plan = plan_sync(workspace, old_manifest, patterns)
+    plan = plan_sync(workspace, old_manifest, index_scope)
 
     if (
         not force
@@ -364,7 +373,7 @@ def index_workspace(
             all_vectors.append(row["vector"])
 
     if force:
-        plan = plan_sync(workspace, {}, patterns)
+        plan = plan_sync(workspace, {}, index_scope)
 
     total_embedded = 0
     total_reused = 0
@@ -387,11 +396,11 @@ def index_workspace(
 
     if force:
         store.replace_all(all_chunks, all_vectors)
-        store.save_manifest(scan_manifest(workspace, patterns))
+        store.save_manifest(scan_manifest(workspace, index_scope))
     elif plan.to_index:
-        store.save_manifest(scan_manifest(workspace, patterns))
+        store.save_manifest(scan_manifest(workspace, index_scope))
 
-    new_manifest = scan_manifest(workspace, patterns)
+    new_manifest = scan_manifest(workspace, index_scope)
     files_seen = len(new_manifest)
     return IndexStats(
         files_seen=files_seen,

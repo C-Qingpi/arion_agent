@@ -73,12 +73,17 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
         query: Annotated[str, "Natural-language search query"],
         target_directories: Annotated[
             list[str] | None,
-            "Optional path prefixes to limit search (workspace-relative)",
+            "Optional path prefixes to limit search (workspace-relative, e.g. ['src', 'docs'])",
+        ] = None,
+        path_glob: Annotated[
+            str | None,
+            "Optional glob filter on result paths (e.g. '**/*.py', '**/*.md', 'src/**')",
         ] = None,
         num_results: Annotated[int, "Max results to return (1-25)"] = default_num_results,
     ) -> str:
         """Semantic search over workspace files by meaning, not exact text.
 
+        Prefer narrow target_directories and path_glob before a workspace-wide query.
         Returns path, line range, and snippet for each hit. Indexing runs in the
         background; results improve as more files are indexed.
         """
@@ -89,6 +94,7 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
             return service.search(
                 query,
                 target_directories=target_directories or None,
+                path_glob=path_glob,
                 num_results=capped,
                 min_score=min_score,
             )

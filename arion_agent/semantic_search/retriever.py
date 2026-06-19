@@ -11,13 +11,13 @@ from arion_agent.semantic_search.config import (
     DEFAULT_WORKSPACE,
     DEPRIORITIZE_PATH_SUBSTRINGS,
     FINAL_TOP_K,
-    INCREMENTAL_BATCH_FILES,
     MIN_HYBRID_SCORE,
     VECTOR_TOP_K,
     VECTOR_WEIGHT,
     resolve_index_dir,
 )
 from arion_agent.semantic_search.embedder import get_embedder
+from arion_agent.semantic_search.ignore import path_matches_glob
 from arion_agent.semantic_search.store import ChunkStore
 from arion_agent.semantic_search.translate import prepare_search_text
 
@@ -92,6 +92,19 @@ def _path_matches(path: str, prefixes: list[str] | None) -> bool:
     return False
 
 
+def _scope_matches(
+    path: str,
+    *,
+    target_directories: list[str] | None,
+    path_glob: str | None,
+) -> bool:
+    if not _path_matches(path, target_directories):
+        return False
+    if path_glob and not path_matches_glob(path, path_glob):
+        return False
+    return True
+
+
 def _is_deprioritized_path(path: str) -> bool:
     norm = path.replace("\\", "/").lower()
     return any(sub in norm for sub in DEPRIORITIZE_PATH_SUBSTRINGS)
@@ -112,6 +125,7 @@ def hybrid_search(
     index_dir: Path | None = None,
     store: ChunkStore | None = None,
     target_directories: list[str] | None = None,
+    path_glob: str | None = None,
     num_results: int = FINAL_TOP_K,
     min_score: float = MIN_HYBRID_SCORE,
 ) -> list[SearchResult]:
@@ -130,9 +144,15 @@ def hybrid_search(
     vector_hits = store.vector_search(query_vec, VECTOR_TOP_K)
 
     scoped = [
-        row for row in vector_hits if _path_matches(row["path"], target_directories)
+        row
+        for row in vector_hits
+        if _scope_matches(
+            row["path"],
+            target_directories=target_directories,
+            path_glob=path_glob,
+        )
     ]
-    if target_directories and not scoped:
+    if (target_directories or path_glob) and not scoped:
         return []
 
     candidates = scoped if scoped else vector_hits
