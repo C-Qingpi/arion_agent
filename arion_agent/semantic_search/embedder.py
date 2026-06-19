@@ -27,6 +27,10 @@ class Embedder:
         return list(self._model.embed([query]))[0]
 
 
+def embedder_loaded() -> bool:
+    return _embedder is not None
+
+
 def get_embedder() -> Embedder:
     global _embedder
     if _embedder is None:

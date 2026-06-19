@@ -16,8 +16,9 @@ SEARCH_SYSTEM_PROMPT = """\
 You have semantic_search to find workspace content by meaning, not exact keywords.
 Use it to locate relevant specs, docs, and code before reading files in depth.
 Pass target_directories to narrow scope when you know the area (e.g. ["docs"]).
-Indexing runs in the background when the agent starts; early queries may return
-partial results until indexing completes.
+Indexing runs in the background when the agent starts. First run on a new
+workspace can take minutes while models load; the tool reports startup status.
+Early queries may return partial results until indexing completes.
 </semantic_search>"""
 
 
@@ -76,7 +77,7 @@ class SearchEnvironment(ArionMiddleware):
         return None
 
     def after_agent(self, state: dict[str, Any]) -> None:
-        self._service.stop()
+        return
 
     def wrap_system_message(self, parts: list[str], **kwargs: Any) -> list[str]:
         if self._system_prompt:

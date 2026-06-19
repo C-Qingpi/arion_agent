@@ -58,11 +58,7 @@ class SearchService:
         return self._store
 
     def start(self) -> None:
-        if self._started:
-            return
-        self._started = True
-
-        if self._config.warmup_embedder:
+        if self._config.warmup_embedder and self._warmup_thread is None:
             self._warmup_thread = threading.Thread(
                 target=get_embedder,
                 name="embedder-warmup",
@@ -70,14 +66,16 @@ class SearchService:
             )
             self._warmup_thread.start()
 
-        self._indexer.start()
+        self._indexer.ensure_running()
 
-        if self._config.enable_watcher:
+        if self._config.enable_watcher and self._watcher is None:
             self._watcher = WorkspaceWatcher(
                 self._workspace,
                 self._indexer.handle_watcher_batch,
             )
             self._watcher.start()
+
+        self._started = True
 
     def stop(self) -> None:
         if not self._started:

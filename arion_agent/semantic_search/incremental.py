@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from arion_agent.semantic_search.config import INCREMENTAL_BATCH_FILES
+from arion_agent.semantic_search.embedder import embedder_loaded
 from arion_agent.semantic_search.indexer import (
     apply_removals,
     apply_renames,
@@ -22,13 +23,16 @@ from arion_agent.semantic_search.store import ChunkStore
 @dataclass(frozen=True, slots=True)
 class IndexerStatus:
     running: bool
+    thread_alive: bool
     initial_sync_done: bool
     total_files: int
     indexed_files: int
     pending_files: int
     chunk_count: int
     embedding: bool
+    embedder_ready: bool
     last_batch_sec: float | None
+    last_error: str | None
 
 
 class IncrementalIndexer:
@@ -57,31 +61,38 @@ class IncrementalIndexer:
         self._initial_sync_done = False
         self._embedding = False
         self._last_batch_sec: float | None = None
-        self._total_files = 0
-        self._indexed_files = 0
+        self._last_error: str | None = None
         self._vector_cache: dict[str, list[float]] = {}
 
     @property
     def status(self) -> IndexerStatus:
         with self._lock:
             pending = len(self._pending) + self._queue.qsize()
+        thread_alive = self._thread is not None and self._thread.is_alive()
         manifest = self._store.load_manifest()
         disk_manifest = scan_manifest(self._workspace, self._patterns)
         return IndexerStatus(
-            running=self._running,
+            running=thread_alive,
+            thread_alive=thread_alive,
             initial_sync_done=self._initial_sync_done,
             total_files=len(disk_manifest),
             indexed_files=len(manifest),
             pending_files=pending,
             chunk_count=self._store.chunk_count(),
             embedding=self._embedding,
+            embedder_ready=embedder_loaded(),
             last_batch_sec=self._last_batch_sec,
+            last_error=self._last_error,
         )
 
-    def start(self) -> None:
-        if self._running:
+    def ensure_running(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
             return
+        self._clear_queue()
+        with self._lock:
+            self._pending.clear()
         self._running = True
+        self._last_error = None
         self._vector_cache = {
             row.get("search_text_hash") or row["content_hash"]: row["vector"]
             for row in self._store.all_rows()
@@ -89,11 +100,14 @@ class IncrementalIndexer:
         self._thread = threading.Thread(target=self._run, name="semantic-indexer", daemon=True)
         self._thread.start()
 
+    def start(self) -> None:
+        self.ensure_running()
+
     def stop(self) -> None:
         self._running = False
         self._queue.put(None)
         if self._thread is not None:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=120)
 
     def request_paths(self, rel_paths: set[str]) -> None:
         with self._lock:
@@ -132,19 +146,33 @@ class IncrementalIndexer:
         if updates:
             self.request_paths(updates)
 
+    def _clear_queue(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
     def _run(self) -> None:
-        self._bootstrap_sync()
-        while self._running:
-            batch = self._drain_batch()
-            if batch:
-                self._index_batch(batch)
-                continue
-            time.sleep(0.2)
+        try:
+            if not self._initial_sync_done:
+                self._bootstrap_sync()
+            while self._running:
+                batch = self._drain_batch()
+                if batch:
+                    self._index_batch(batch)
+                    continue
+                time.sleep(0.2)
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            self._running = False
+            self._embedding = False
 
     def _bootstrap_sync(self) -> None:
         manifest = self._store.load_manifest()
         sync = plan_sync(self._workspace, manifest, self._patterns)
-        self._total_files = len(scan_manifest(self._workspace, self._patterns))
 
         if sync.renames:
             apply_renames(self._store, sync.renames)
@@ -154,7 +182,7 @@ class IncrementalIndexer:
         for path in sync.to_index:
             self.request_paths({path.relative_to(self._workspace).as_posix()})
 
-        while True:
+        while self._running:
             with self._lock:
                 pending = len(self._pending)
             if pending == 0:
@@ -187,7 +215,7 @@ class IncrementalIndexer:
     def _index_batch(self, paths: list[Path]) -> None:
         self._embedding = True
         started = time.perf_counter()
-        stats = index_file_batch(
+        index_file_batch(
             paths,
             self._workspace,
             self._store,
@@ -196,4 +224,3 @@ class IncrementalIndexer:
         )
         self._last_batch_sec = time.perf_counter() - started
         self._embedding = False
-        self._indexed_files = len(self._store.load_manifest())
