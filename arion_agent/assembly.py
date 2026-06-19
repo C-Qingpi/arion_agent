@@ -261,11 +261,15 @@ def configure_compression(
     elif policy is STANDARD_POLICY or summarization is None:
         prefetch_policy = STANDARD_PREFETCH_POLICY
 
+    max_tokens: int | None = None
+    if hasattr(summarization, "max_tokens"):
+        max_tokens = summarization.max_tokens
+
     registry = PrefetchRegistry()
     compress_kwargs_shared: dict[str, Any] = {
         "history_dir": ctx.identity_dir,
         "workspace_dir": ctx.workspace_dir,
-        "max_tokens": None,
+        "max_tokens": max_tokens,
         "is_perpetual": is_perpetual,
         "abort_check": abort_check,
         "cutoff_fn": cutoff_fn,
@@ -278,7 +282,7 @@ def configure_compression(
         compress_kwargs_shared["arg_max_length"] = arg_max_length
 
     route_compression = make_route_compression(
-        policy, max_tokens=None, prefetch_policy=prefetch_policy,
+        policy, max_tokens=max_tokens, prefetch_policy=prefetch_policy,
     )
     prefetch_node = make_prefetch_node(
         policy,

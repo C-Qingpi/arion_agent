@@ -70,6 +70,7 @@ class SummarizationConfig:
 
     policy: SummarizationPolicy | Callable[..., "PolicyDecision | None"] | None = None
     prefetch_policy: Callable[..., "PolicyDecision | None"] | None = None
+    max_tokens: int | None = None
     summary_prompt: str | None = None
     summary_budget: int | None = None
     arg_truncation_trigger: int | None = None
