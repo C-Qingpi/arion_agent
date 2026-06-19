@@ -831,9 +831,21 @@ def make_prefetch_node(
 
         ready = registry.take_if_ready(thread_id)
         if ready is not None:
+            # Guard: filter stale evictions that reference messages already
+            # removed from the state (e.g. by a hard compression that ran after
+            # the prefetch snapshot was taken but before take_if_ready).
+            current_ids = {m.id for m in messages if getattr(m, "id", None)}
+            valid = [r for r in ready.evictions if getattr(r, "id", None) in current_ids]
+            if len(valid) != len(ready.evictions):
+                stale = len(ready.evictions) - len(valid)
+                logger.warning(
+                    "Prefetch apply: %d of %d evictions are stale (messages already "
+                    "gone — likely evicted by hard compression). Skipping stale refs.",
+                    stale, len(ready.evictions),
+                )
             logger.info(
                 "Prefetch apply: evicting %d messages, kept %d (proactive, no block)",
-                ready.messages_summarized, ready.messages_kept,
+                len(valid), ready.messages_kept,
             )
             if on_event is not None:
                 on_event(SummarizationEvent(
@@ -847,7 +859,7 @@ def make_prefetch_node(
                 ))
             return {
                 "summary": ready.summary_wrapper,
-                "messages": ready.evictions,
+                "messages": valid,
             }
 
         token_count = _estimate_messages_tokens(messages)
@@ -961,6 +973,18 @@ def make_compress_node(
             prefetched = await registry.await_result(thread_id, cutoff=cutoff)
 
         if prefetched is not None and prefetched.cutoff == cutoff:
+            # Filter stale evictions: matching cutoff indices do not guarantee
+            # matching message IDs — before_agent middleware can insert/remove
+            # messages between the prefetch snapshot and the compress apply.
+            current_ids = {m.id for m in messages if getattr(m, "id", None)}
+            valid_evictions = [r for r in prefetched.evictions
+                               if getattr(r, "id", None) in current_ids]
+            if len(valid_evictions) != len(prefetched.evictions):
+                logger.warning(
+                    "Compression fast path: %d stale evictions filtered "
+                    "(messages shifted by middleware)",
+                    len(prefetched.evictions) - len(valid_evictions),
+                )
             logger.info(
                 "Compression fast path: applying prefetched summary "
                 "(evicted %d, kept %d)",
@@ -979,7 +1003,7 @@ def make_compress_node(
                 ))
             return {
                 "summary": prefetched.summary_wrapper,
-                "messages": prefetched.evictions,
+                "messages": valid_evictions,
             }
 
         if prefetched is not None and prefetched.cutoff < cutoff:

@@ -600,8 +600,8 @@ def _sanitize_tool_call_ids(messages: list[Any]) -> list[Any]:
 class PatchToolCallsMiddleware(ArionMiddleware):
     """Ensure every tool_call has a matching ToolMessage and vice versa.
 
-    Orphaned ToolMessages are patched in-memory for the current LLM call;
-    we do not remove them from the checkpoint (avoids conflict with compression).
+    Orphaned ToolMessages are patched in-memory for the current LLM call
+    and removed from the checkpoint via drain_state_updates.
     """
 
     def __init__(self) -> None:
@@ -623,19 +623,17 @@ class PatchToolCallsMiddleware(ArionMiddleware):
     ) -> tuple[list[Any], list[BaseTool], dict[str, Any]]:
         """Patch dangling tool calls and orphaned tool messages.
 
-        Injects synthetic AIMessage for orphaned ToolMessages so the send list is valid.
-        We do not queue RemoveMessage for orphans (would conflict with compression evictions
-        and cause 'ID doesn't exist' in the reducer); orphans remain in the checkpoint.
+        Sends synthetic AIMessage for orphaned ToolMessages so the send list is valid.
+        Orphaned ToolMessages are queued for checkpoint removal via drain_state_updates;
+        compression now filters stale evictions so there is no conflict.
         """
         orphan_ids = _find_orphaned_tool_message_ids(messages)
-        # Do not queue RemoveMessage for orphans: compression may have already evicted the same
-        # messages; the reducer then errors "Attempting to delete a message with an ID that
-        # doesn't exist". We still patch the send list (synthetic AIMessage + orphans) so the
-        # API gets a valid sequence; orphans remain in the checkpoint.
-        self._pending_removals = []
         if orphan_ids:
+            self._pending_removals.extend(
+                RemoveMessage(id=oid) for oid in orphan_ids
+            )
             logger.info(
-                "Orphaned ToolMessage(s) (send list patched; not removing from checkpoint): %s",
+                "Orphaned ToolMessage(s) (queued for checkpoint removal): %s",
                 orphan_ids,
             )
 
@@ -655,7 +653,7 @@ class PatchToolCallsMiddleware(ArionMiddleware):
         return response
 
     def drain_state_updates(self) -> list[Any]:
-        """Return pending state updates (we no longer emit RemoveMessage for orphans)."""
+        """Return pending RemoveMessage updates for orphaned ToolMessages."""
         removals = self._pending_removals
         self._pending_removals = []
         return removals
