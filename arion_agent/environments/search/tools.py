@@ -13,7 +13,7 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
     def semantic_search(
         query: Annotated[str, "Natural-language search query"],
         target_directories: Annotated[
-            list[str] | None,
+            list[str],
             "Optional path prefixes to limit search (workspace-relative)",
         ] = None,
         num_results: Annotated[int, "Max results to return (1-25)"] = default_num_results,
