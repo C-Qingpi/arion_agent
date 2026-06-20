@@ -20,6 +20,8 @@ def _index_status_line(st: IndexerStatus) -> str:
             return f"⏳ Index startup: loading embedding models ({st.pending_files} files queued)"
         if st.embedding:
             return f"⏳ Index startup: embedding first batch ({st.pending_files} files queued)"
+        if st.total_files == 0:
+            return "ℹ️ Workspace has no files to index — search will return nothing"
         return f"⏳ Index starting ({st.pending_files}/{st.total_files} files queued)"
     if not st.initial_sync_done:
         busy = " (indexing)" if st.embedding else ""
@@ -56,6 +58,12 @@ def format_empty_search_message(st: IndexerStatus) -> str:
             )
         if st.running and st.pending_files > 0:
             return f"{status}\nRetry shortly."
+        if st.running and st.pending_files == 0 and st.total_files > 0:
+            return (
+                f"{status}\n"
+                "Indexer is active but no files are queued yet — scanner may still be discovering "
+                "files. Try again shortly."
+            )
         return f"No results.\n{status}"
 
     if not st.initial_sync_done:
@@ -84,11 +92,11 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
     def semantic_search(
         query: Annotated[str, "Natural-language search query"],
         target_directories: Annotated[
-            list[str] | None,
+            list[str],
             "Optional path prefixes to limit search (workspace-relative, e.g. ['src', 'docs'])",
         ] = None,
         path_glob: Annotated[
-            str | None,
+            str,
             "Optional glob filter on result paths (e.g. '**/*.py', '**/*.md', 'src/**')",
         ] = None,
         num_results: Annotated[int, "Max results to return (1-25)"] = default_num_results,
