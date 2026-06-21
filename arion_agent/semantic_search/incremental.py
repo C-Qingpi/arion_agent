@@ -17,6 +17,8 @@ from arion_agent.semantic_search.indexer import (
     scan_manifest,
 )
 from arion_agent.semantic_search.scope import (
+    ignore_config_mtime,
+    is_ignore_config_rel,
     is_search_config_rel,
     resolve_index_scope,
     search_config_mtime,
@@ -56,6 +58,7 @@ class IncrementalIndexer:
         self._extra_ignore = extra_ignore
         self._index_scope = resolve_index_scope(self._workspace, extra_ignore=extra_ignore)
         self._scope_mtime = search_config_mtime(self._workspace)
+        self._ignore_mtime = ignore_config_mtime(self._workspace)
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._pending: set[str] = set()
         self._lock = threading.Lock()
@@ -66,6 +69,7 @@ class IncrementalIndexer:
         self._last_batch_sec: float | None = None
         self._last_error: str | None = None
         self._vector_cache: dict[str, list[float]] = {}
+        self._watcher = None
 
     @property
     def status(self) -> IndexerStatus:
@@ -132,6 +136,13 @@ class IncrementalIndexer:
             self._request_resync()
             return
 
+        if any(is_ignore_config_rel(rel) for rel in rel_paths):
+            self._maybe_reload_scope()
+            self._request_resync()
+            if self._watcher is not None:
+                self._watcher.reload_patterns()
+            return
+
         deletions = {
             rel[len("__deleted__:"):]
             for rel in rel_paths
@@ -161,6 +172,10 @@ class IncrementalIndexer:
         if updates:
             self.request_paths(updates)
 
+    def set_watcher(self, watcher) -> None:
+        """Register the WorkspaceWatcher so its ignore patterns can be refreshed on config change."""
+        self._watcher = watcher
+
     def reset_and_resync(self) -> None:
         self._store.clear()
         self._index_scope = resolve_index_scope(
@@ -168,6 +183,7 @@ class IncrementalIndexer:
             extra_ignore=self._extra_ignore,
         )
         self._scope_mtime = search_config_mtime(self._workspace)
+        self._ignore_mtime = ignore_config_mtime(self._workspace)
         self._initial_sync_done = False
         self._vector_cache.clear()
         self._last_error = None
@@ -177,15 +193,26 @@ class IncrementalIndexer:
         self.ensure_running()
 
     def _maybe_reload_scope(self) -> bool:
+        changed = False
+
+        # Check search.json
         mtime = search_config_mtime(self._workspace)
-        if mtime == self._scope_mtime:
-            return False
-        self._index_scope = resolve_index_scope(
-            self._workspace,
-            extra_ignore=self._extra_ignore,
-        )
-        self._scope_mtime = mtime
-        return True
+        if mtime != self._scope_mtime:
+            self._scope_mtime = mtime
+            changed = True
+
+        # Check .searchignore and .gitignore
+        ignore_mtime = ignore_config_mtime(self._workspace)
+        if ignore_mtime != self._ignore_mtime:
+            self._ignore_mtime = ignore_mtime
+            changed = True
+
+        if changed:
+            self._index_scope = resolve_index_scope(
+                self._workspace,
+                extra_ignore=self._extra_ignore,
+            )
+        return changed
 
     def _request_resync(self) -> None:
         self._initial_sync_done = False

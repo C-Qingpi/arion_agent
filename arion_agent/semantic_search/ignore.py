@@ -114,9 +114,6 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     # Common Desktop deploy checkouts (Mac: workspace = ~/Desktop)
     "ArionAgentProd/",
     "ArionAgentDev/",
-    # Large standalone trees observed on user Desktop
-    "final_exam_standalone/",
-    "to_be_deleted/",
 )
 
 

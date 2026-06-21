@@ -12,26 +12,34 @@ SEARCHIGNORE_REL = ".searchignore"
 
 DEFAULT_SEARCH_CONFIG = f"""{{
   // Semantic index scope for this workspace. Edit with write_file; indexer rescans on save.
-  // Precedence: skip > only > factory defaults. allow bypasses factory/.searchignore skips.
+  // Fields: scope, exclude, override. Order: scope > exclude > override > builtin_ignore.
   // Globs are workspace-relative. dir/** matches all files under dir.
   //
-  // max_depth — max directory nesting to walk (null = no limit beyond factory default {INDEX_MAX_DEPTH})
-  // skip      — extra blacklist: never index matching paths
-  // only      — whitelist: when non-empty, index ONLY matching paths
-  // allow     — override: index paths factory would normally skip
+  // Old names (only, skip, allow) still work as fallbacks.
+  //
+  // scope    — which folders to walk (S). Default: whole workspace.
+  //            Once set, ONLY files under these folders are considered.
+  // exclude  — blacklist (B): never index matching paths. Highest filter priority.
+  // override — whitelist (W): index these even if builtin_ignore would block them.
+  // builtin_ignore (I) — implicit: .git, node_modules, __pycache__, .venv, dist, .arion, etc.
+  //            See: arion_agent/semantic_search/ignore.py → DEFAULT_IGNORE_PATTERNS
+  //
+  // Filter precedence inside scope: exclude > override > builtin_ignore
   //
   // Examples:
-  //   {{"skip":["heavy_backup/**"]}}
-  //   {{"only":["src/**","docs/**"]}}
-  //   {{"only":["src/**"],"skip":["src/**/test_*.py"]}}
-  //   {{"allow":["final_exam/**"],"only":["final_exam/**/*analysis.md"]}}
+  //   Only index src and docs folders:
+  //     {{"scope":["src/**","docs/**"]}}
+  //   Exclude test files from scope:
+  //     {{"scope":["src/**"],"exclude":["src/**/test_*.py"]}}
+  //   Force-index a path that builtin_ignore would skip:
+  //     {{"scope":["myproj/**"],"override":["myproj/dist/**"]}}
   //
   // UI "Reset index" clears .arion/index/ and triggers a full rebuild.
 
   "max_depth": {INDEX_MAX_DEPTH},
-  "skip": [],
-  "only": [],
-  "allow": []
+  "scope": [],
+  "exclude": [],
+  "override": []
 }}
 """
 
@@ -103,6 +111,23 @@ def is_search_config_rel(rel: str) -> bool:
     return rel.replace("\\", "/") == SEARCH_CONFIG_REL
 
 
+def is_ignore_config_rel(rel: str) -> bool:
+    """Check if a rel path is .searchignore or .gitignore."""
+    rel_posix = rel.replace("\\", "/")
+    return rel_posix == SEARCHIGNORE_REL or rel_posix == ".gitignore"
+
+
+def ignore_config_mtime(workspace: Path) -> tuple[float, float]:
+    """Return (.searchignore mtime, .gitignore mtime). 0.0 if file doesn't exist."""
+    ws = workspace.resolve()
+    si = ws / SEARCHIGNORE_REL
+    gi = ws / ".gitignore"
+    return (
+        si.stat().st_mtime if si.is_file() else 0.0,
+        gi.stat().st_mtime if gi.is_file() else 0.0,
+    )
+
+
 def load_search_scope(workspace: Path) -> SearchScope:
     path = search_config_path(workspace)
     if not path.is_file():
@@ -117,9 +142,9 @@ def load_search_scope(workspace: Path) -> SearchScope:
 
     return SearchScope(
         max_depth=max_depth,
-        only=_str_list(data.get("only"), "only"),
-        skip=_str_list(data.get("skip"), "skip"),
-        allow=_str_list(data.get("allow"), "allow"),
+        only=_str_list(data.get("scope") or data.get("only"), "scope/only"),
+        skip=_str_list(data.get("exclude") or data.get("skip"), "exclude/skip"),
+        allow=_str_list(data.get("override") or data.get("allow"), "override/allow"),
     )
 
 
@@ -188,7 +213,7 @@ def should_prune_directory(
         return True
 
     if should_ignore(norm, patterns) or should_ignore(f"{norm}/", patterns):
-        if subtree_might_match(norm, allow):
+        if subtree_might_match(norm, allow) or subtree_might_match(norm, only):
             return False
         return True
 
@@ -206,11 +231,21 @@ def subtree_might_match(dir_prefix: str, globs: tuple[str, ...]) -> bool:
         g = glob.replace("\\", "/").strip()
         if g.startswith("**/"):
             return True
+        has_double_star = "**" in g
         fixed = g.split("*")[0].strip("/")
         if not fixed:
             return True
-        if fixed == prefix or fixed.startswith(prefix + "/") or prefix.startswith(fixed.split("/")[0]):
+        if fixed == prefix or fixed.startswith(prefix + "/"):
             return True
+        if has_double_star:
+            # ** crosses directory boundaries: examkit/** matches examkit/sub/...
+            if prefix.startswith(fixed + "/"):
+                return True
+        else:
+            # Single * only matches at the fixed directory level
+            # e.g., final_exam_standalone/*.py only matches files IN that dir
+            if prefix == fixed:
+                return True
     return False
 
 

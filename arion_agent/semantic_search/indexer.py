@@ -56,8 +56,11 @@ class SyncPlan:
     unchanged: list[str] = field(default_factory=list)
 
 
-def file_content_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def file_content_hash(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
 
 
 def scan_manifest(
@@ -76,10 +79,12 @@ def scan_manifest(
         skip=index_scope.skip,
         allow=index_scope.allow,
     )
-    return {
-        path.relative_to(workspace).as_posix(): file_content_hash(path)
-        for path in files
-    }
+    result: dict[str, str] = {}
+    for path in files:
+        digest = file_content_hash(path)
+        if digest is not None:
+            result[path.relative_to(workspace).as_posix()] = digest
+    return result
 
 
 def detect_renames(

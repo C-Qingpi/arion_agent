@@ -7,47 +7,61 @@ from pathlib import Path
 import lancedb
 import pyarrow as pa
 
-from arion_agent.semantic_search.config import Chunk
+from arion_agent.semantic_search.config import (
+    IVF_NUM_PARTITIONS,
+    IVF_NUM_SUB_VECTORS,
+    Chunk,
+)
 
 
 TABLE_NAME = "chunks"
+INDEX_NAME = "vector_idx"
+VECTOR_COLUMN = "vector"
 
 
 class ChunkStore:
+    """Persistent LanceDB-backed chunk store with IVF_PQ index.
+
+    All mutation operations (upsert, delete, rename, replace_all) preserve
+    the ANN index so that vector search remains fast at any data size.
+    """
+
     def __init__(self, index_dir: Path) -> None:
         self.index_dir = index_dir
         self.index_dir.mkdir(parents=True, exist_ok=True)
         self.db = lancedb.connect(str(index_dir / "lance"))
         self.manifest_path = index_dir / "manifest.json"
-        self._lock = threading.RLock()
+        self._write_lock = threading.Lock()
+
+    # ── Manifest management ──────────────────────────────────────────
 
     def load_manifest(self) -> dict[str, str]:
-        with self._lock:
-            if not self.manifest_path.exists():
-                return {}
-            return json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        if not self.manifest_path.exists():
+            return {}
+        with open(self.manifest_path, encoding="utf-8") as f:
+            return json.load(f)
 
     def save_manifest(self, manifest: dict[str, str]) -> None:
-        with self._lock:
-            self.manifest_path.write_text(
-                json.dumps(manifest, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
+        self.manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def update_manifest_entries(self, entries: dict[str, str]) -> None:
-        with self._lock:
-            manifest = self.load_manifest()
-            manifest.update(entries)
-            self.save_manifest(manifest)
+        manifest = self.load_manifest()
+        manifest.update(entries)
+        self.save_manifest(manifest)
 
     def remove_manifest_entries(self, paths: list[str]) -> None:
-        with self._lock:
-            manifest = self.load_manifest()
-            for path in paths:
-                manifest.pop(path, None)
-            self.save_manifest(manifest)
+        manifest = self.load_manifest()
+        for path in paths:
+            manifest.pop(path, None)
+        self.save_manifest(manifest)
 
-    def _row_dict(self, chunk: Chunk, vector: list[float]) -> dict:
+    # ── Internal helpers ─────────────────────────────────────────────
+
+    @staticmethod
+    def _row_dict(chunk: Chunk, vector: list[float]) -> dict:
         return {
             "path": chunk.path,
             "start_line": chunk.start_line,
@@ -57,106 +71,167 @@ class ChunkStore:
             "text": chunk.text,
             "search_text": chunk.search_text,
             "search_text_hash": chunk.search_text_hash,
-            "vector": vector,
+            VECTOR_COLUMN: vector,
         }
 
+    def _ensure_index(self) -> None:
+        """Create IVF_PQ index on the vector column if it does not exist."""
+        try:
+            table = self.db.open_table(TABLE_NAME)
+        except Exception:
+            return
+        existing = [idx.name for idx in table.list_indices()]
+        if INDEX_NAME in existing:
+            return
+
+        row_count = table.count_rows()
+        if row_count < IVF_NUM_SUB_VECTORS * 8:
+            return  # too few rows for PQ training — skip until we have enough
+
+        try:
+            table.create_index(
+                metric="cosine",
+                num_partitions=min(IVF_NUM_PARTITIONS, row_count // 4),
+                num_sub_vectors=IVF_NUM_SUB_VECTORS,
+                index_type="IVF_PQ",
+                name=INDEX_NAME,
+            )
+        except Exception:
+            pass  # non-critical; search still works via exhaustive scan
+
+    def _ensure_table(self) -> object | None:
+        """Return the table handle, creating it if missing (no index yet)."""
+        try:
+            return self.db.open_table(TABLE_NAME)
+        except Exception:
+            return None
+
+    # ── Table lifecycle ──────────────────────────────────────────────
+
     def clear(self) -> None:
-        with self._lock:
-            if TABLE_NAME in self.db.table_names():
-                self.db.drop_table(TABLE_NAME)
+        with self._write_lock:
+            for name in self.db.table_names():
+                if name == TABLE_NAME:
+                    self.db.drop_table(TABLE_NAME)
             self.save_manifest({})
 
     def replace_all(self, chunks: list[Chunk], vectors: list[list[float]]) -> None:
-        with self._lock:
+        """Replace entire store contents and (re)build the vector index."""
+        with self._write_lock:
+            if TABLE_NAME in self.db.table_names():
+                self.db.drop_table(TABLE_NAME)
+
             rows = [
                 self._row_dict(chunk, vector)
                 for chunk, vector in zip(chunks, vectors, strict=True)
             ]
-            table = pa.Table.from_pylist(rows)
-            if TABLE_NAME in self.db.table_names():
-                self.db.drop_table(TABLE_NAME)
             if rows:
-                self.db.create_table(TABLE_NAME, table)
+                table = self.db.create_table(TABLE_NAME, pa.Table.from_pylist(rows))
+                self._ensure_index()
+
+    # ── Incremental mutations (index-preserving) ─────────────────────
 
     def delete_by_path(self, path: str) -> None:
-        with self._lock:
-            if not self.has_table():
+        """Delete all chunks for a given file path. Preserves the index."""
+        with self._write_lock:
+            table = self._ensure_table()
+            if table is None:
                 return
-            kept = [
-                row for row in self.all_rows_unlocked()
-                if row["path"] != path
-            ]
-            self.db.drop_table(TABLE_NAME)
-            if kept:
-                self.db.create_table(TABLE_NAME, pa.Table.from_pylist(kept))
+            table.delete(f"path = {quote_literal(path)}")
 
     def upsert_file(self, chunks: list[Chunk], vectors: list[list[float]]) -> None:
-        with self._lock:
-            if not chunks:
-                return
+        """Upsert all chunks for a single file path. Preserves the index."""
+        if not chunks:
+            return
+        with self._write_lock:
             path = chunks[0].path
             new_rows = [
                 self._row_dict(chunk, vector)
                 for chunk, vector in zip(chunks, vectors, strict=True)
             ]
-            kept = [
-                row for row in self.all_rows_unlocked()
-                if row["path"] != path
-            ]
-            kept.extend(new_rows)
-            merged = pa.Table.from_pylist(kept)
-            if TABLE_NAME in self.db.table_names():
-                self.db.drop_table(TABLE_NAME)
-            self.db.create_table(TABLE_NAME, merged)
+            new_table = pa.Table.from_pylist(new_rows)
+
+            existing = self._ensure_table()
+            if existing is None:
+                # First write — create table (index deferred until enough rows)
+                self.db.create_table(TABLE_NAME, new_table)
+                return
+
+            # Use merge_insert: match on path column, insert or update
+            merge = existing.merge_insert("path")
+            merge.when_not_matched_insert_all()
+            merge.when_matched_update_all()
+            merge.execute(new_table)
 
     def rename_path(self, old_path: str, new_path: str) -> int:
-        with self._lock:
-            if not self.has_table():
+        """Rename path in all chunks. Preserves the index."""
+        with self._write_lock:
+            table = self._ensure_table()
+            if table is None:
                 return 0
-            rows = [dict(row) for row in self.all_rows_unlocked()]
-            updated = 0
-            for row in rows:
-                if row["path"] == old_path:
-                    row["path"] = new_path
-                    updated += 1
-            if updated == 0:
-                return 0
-            merged = pa.Table.from_pylist(rows)
-            self.db.drop_table(TABLE_NAME)
-            self.db.create_table(TABLE_NAME, merged)
-            return updated
+            result = table.update(
+                where=f"path = {quote_literal(old_path)}",
+                values={"path": new_path},
+            )
+            n = getattr(result, "rows_updated", 0)
+            return n or 0
+
+    # ── Read operations ──────────────────────────────────────────────
 
     def has_table(self) -> bool:
-        with self._lock:
-            return TABLE_NAME in self.db.table_names()
+        return TABLE_NAME in self.db.table_names()
 
     def table(self):
         return self.db.open_table(TABLE_NAME)
 
-    def vector_search(self, query_vector: list[float], limit: int) -> list[dict]:
-        with self._lock:
-            if not self.has_table():
-                return []
-            return (
-                self.table()
-                .search(query_vector)
-                .limit(limit)
-                .to_list()
-            )
+    def vector_search(
+        self,
+        query_vector: list[float],
+        limit: int,
+        where: str | None = None,
+    ) -> list[dict]:
+        """ANN vector search, optionally pre-filtered with a LanceDB WHERE clause.
 
-    def all_rows(self) -> list[dict]:
-        with self._lock:
-            return self.all_rows_unlocked()
-
-    def all_rows_unlocked(self) -> list[dict]:
-        if not self.has_table():
+        Parameters
+        ----------
+        query_vector : list[float]
+            Query embedding vector.
+        limit : int
+            Max results to return.
+        where : str | None
+            Optional SQL-like filter (e.g. ``"path LIKE 'src/%'"``).
+            Applied BEFORE the ANN search for efficient pre-filtering.
+        """
+        try:
+            t = self.db.open_table(TABLE_NAME)
+        except Exception:
             return []
-        return self.table().to_arrow().to_pylist()
 
-    def indexed_paths(self) -> set[str]:
-        with self._lock:
-            return {row["path"] for row in self.all_rows_unlocked()}
+        q = t.search(query_vector).limit(limit)
+        if where:
+            q = q.where(where)
+        return q.to_list()
 
     def chunk_count(self) -> int:
-        with self._lock:
-            return len(self.all_rows_unlocked())
+        try:
+            t = self.db.open_table(TABLE_NAME)
+            return t.count_rows()
+        except Exception:
+            return 0
+
+    def all_rows(self) -> list[dict]:
+        """Load all rows (expensive — avoid for large stores)."""
+        try:
+            t = self.db.open_table(TABLE_NAME)
+            return t.to_arrow().to_pylist()
+        except Exception:
+            return []
+
+    def indexed_paths(self) -> set[str]:
+        return {row["path"] for row in self.all_rows()}
+
+
+def quote_literal(value: str) -> str:
+    """Quote a string for use as a SQL string literal in LanceDB's dialect."""
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"

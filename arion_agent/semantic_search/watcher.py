@@ -10,7 +10,7 @@ from watchdog.observers import Observer
 
 from arion_agent.semantic_search.config import TEXT_EXTENSIONS, WATCHER_DEBOUNCE_SEC
 from arion_agent.semantic_search.ignore import load_ignore_patterns, should_ignore
-from arion_agent.semantic_search.scope import is_search_config_rel
+from arion_agent.semantic_search.scope import is_ignore_config_rel, is_search_config_rel
 
 
 class _DebouncedHandler(FileSystemEventHandler):
@@ -54,7 +54,9 @@ class _DebouncedHandler(FileSystemEventHandler):
         if should_ignore(rel, self._patterns) and not is_search_config_rel(rel):
             return None
         if raw.is_file() and raw.suffix.lower() not in TEXT_EXTENSIONS:
-            return None
+            # Allow extensionless config/ignore files (e.g. .searchignore, .gitignore)
+            if not (is_search_config_rel(rel) or is_ignore_config_rel(rel)):
+                return None
         return rel
 
     def _schedule(self, rel: str | None) -> None:
@@ -75,6 +77,10 @@ class _DebouncedHandler(FileSystemEventHandler):
             self._timer = None
         if batch:
             self._on_change(batch)
+
+    def reload_patterns(self) -> None:
+        """Reload ignore patterns from disk (e.g. after .searchignore or .gitignore change)."""
+        self._patterns = load_ignore_patterns(self._workspace)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if event.is_directory:
@@ -129,3 +135,7 @@ class WorkspaceWatcher:
     def stop(self) -> None:
         self._observer.stop()
         self._observer.join(timeout=5)
+
+    def reload_patterns(self) -> None:
+        """Reload ignore patterns from disk. Call after .searchignore or .gitignore change."""
+        self._handler.reload_patterns()

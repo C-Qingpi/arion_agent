@@ -83,6 +83,7 @@ class SearchService:
                 self._workspace,
                 self._indexer.handle_watcher_batch,
             )
+            self._indexer.set_watcher(self._watcher)
             self._watcher.start()
 
         self._started = True
