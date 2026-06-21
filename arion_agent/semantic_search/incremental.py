@@ -229,6 +229,9 @@ class IncrementalIndexer:
 
     def _run(self) -> None:
         try:
+            # Ensure index exists even if resuming after a crash/restart
+            # where bootstrap already completed in a previous session
+            self._store._ensure_index()
             while self._running:
                 if self._maybe_reload_scope():
                     self._request_resync()
@@ -274,6 +277,7 @@ class IncrementalIndexer:
             time.sleep(0.1)
 
         self._initial_sync_done = True
+        self._store._ensure_index()
 
     def _drain_batch(self) -> list[Path]:
         rels: list[str] = []

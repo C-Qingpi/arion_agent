@@ -20,7 +20,7 @@ WATCHER_DEBOUNCE_SEC = 0.5
 EMBEDDER_WARMUP = True
 INDEX_MAX_DEPTH = 12
 
-# IVF_PQ index for fast ANN search (only created when row count > IVF_MIN_ROWS)
+# IVF_PQ index for fast ANN search (only created when row count > IVF_NUM_SUB_VECTORS * 8 = 256)
 IVF_NUM_PARTITIONS = 256
 IVF_NUM_SUB_VECTORS = 32
 IVF_PQ_METRIC = "cosine"
