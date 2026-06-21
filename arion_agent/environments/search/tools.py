@@ -4,6 +4,8 @@ from typing import Annotated, TYPE_CHECKING
 
 from langchain_core.tools import tool
 
+from arion_agent.semantic_search.embedder import embedder_loaded
+
 if TYPE_CHECKING:
     from arion_agent.semantic_search.incremental import IndexerStatus
     from arion_agent.semantic_search.service import SearchService
@@ -87,6 +89,25 @@ def _format_hits(results, st: IndexerStatus | None) -> str:
     return "\n".join(lines)
 
 
+def _format_status_detail(st: IndexerStatus) -> str:
+    """Build a detailed multi-line indexer status report."""
+    lines = [
+        f"Indexer running: {st.running}",
+        f"Background thread: {'alive' if st.thread_alive else 'stopped'}",
+        f"Initial sync done: {st.initial_sync_done}",
+        f"Files: {st.indexed_files} indexed / {st.total_files} total ({st.pending_files} pending)",
+        f"Chunks: {st.chunk_count}",
+        f"Embedder: {'ready' if st.embedder_ready else 'loading...'}",
+    ]
+    if st.embedding:
+        lines.append("Status: embedding in progress")
+    if st.last_batch_sec is not None:
+        lines.append(f"Last batch time: {st.last_batch_sec:.1f}s")
+    if st.last_error:
+        lines.append(f"Last error: {st.last_error}")
+    return "\n".join(lines)
+
+
 def create_search_tools(service: SearchService, *, min_score: float, default_num_results: int) -> list:
     @tool
     def semantic_search(
@@ -111,6 +132,14 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
         capped = max(1, min(num_results, 25))
         service.start()
 
+        # Don't block on model download — return status immediately
+        if not embedder_loaded():
+            st = service.status()
+            return (
+                f"⏳ Embedding model still loading...\n{_index_status_line(st)}\n"
+                "Retry in 1-2 minutes when model warmup completes."
+            )
+
         def _run_search():
             return service.search(
                 query,
@@ -124,12 +153,39 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
         st = service.status()
         if not results and not st.thread_alive and st.indexed_files < st.total_files:
             service.start()
-            results = _run_search()
-            st = service.status()
+            if embedder_loaded():
+                results = _run_search()
+                st = service.status()
 
         if not results:
             return format_empty_search_message(st)
 
         return _format_hits(results, st)
 
-    return [semantic_search]
+    @tool
+    def indexer_status() -> str:
+        """Return the current state of the workspace semantic search indexer.
+
+        Shows whether the indexer is running, how many files have been indexed
+        vs discovered, chunk counts, embedder state, and any errors. Use this to
+        understand why search results may be incomplete, whether the indexer has
+        stalled, or if a reset is needed.
+        """
+        service.start()
+        st = service.status()
+        return _format_status_detail(st)
+
+    @tool
+    def reset_search_index() -> str:
+        """Reset and rebuild the semantic search index from scratch.
+
+        Clears all indexed data and starts a fresh scan of the workspace.
+        Useful when: the index contains stale or incorrect data, search scope
+        has changed, or the index is in an unrecoverable error state.
+        The rebuild runs in the background; indexer_status reports progress.
+        """
+        service.reset_index()
+        st = service.status()
+        return f"Index cleared and rebuild started.\n{_format_status_detail(st)}"
+
+    return [semantic_search, indexer_status, reset_search_index]
