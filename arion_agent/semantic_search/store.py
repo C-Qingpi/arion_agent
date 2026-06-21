@@ -175,11 +175,11 @@ class ChunkStore:
                 self._ensure_index()
                 return
 
-            # Use merge_insert: match on path column, insert or update
-            merge = existing.merge_insert("path")
-            merge.when_not_matched_insert_all()
-            merge.when_matched_update_all()
-            merge.execute(new_table)
+            # Delete old chunks for this path, then insert fresh.
+            # This avoids ambiguous merge inserts when multiple chunks
+            # share the same path key (the norm for any non-trivial file).
+            existing.delete(f"path = {quote_literal(path)}")
+            existing.add(new_table)
             self._ensure_index()
 
     def rename_path(self, old_path: str, new_path: str) -> int:
