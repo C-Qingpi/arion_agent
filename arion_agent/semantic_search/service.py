@@ -109,6 +109,10 @@ class SearchService:
         num_results: int = FINAL_TOP_K,
         min_score: float = MIN_HYBRID_SCORE,
     ) -> list[SearchResult]:
+        # Ensure vector index exists before first query of each session.
+        # _ensure_index is a no-op after the first call, so subsequent
+        # queries incur only a cheap boolean check.
+        self._store._ensure_index()
         return hybrid_search(
             query,
             index_dir=self._index_dir,

@@ -32,6 +32,7 @@ class ChunkStore:
         self.db = lancedb.connect(str(index_dir / "lance"))
         self.manifest_path = index_dir / "manifest.json"
         self._write_lock = threading.Lock()
+        self._index_exists = False
 
     # ── Manifest management ──────────────────────────────────────────
 
@@ -76,13 +77,21 @@ class ChunkStore:
 
     def _ensure_index(self) -> None:
         """Create IVF_PQ index on the vector column if it does not exist."""
+        if self._index_exists:
+            return
         try:
             table = self.db.open_table(TABLE_NAME)
         except Exception:
             return
+        # LanceDB 0.33 list_indices() is session-local — a recognized
+        # index in this session means it was created (or verified) here.
         existing = [idx.name for idx in table.list_indices()]
         if INDEX_NAME in existing:
+            self._index_exists = True
             return
+        # On-disk index files from a prior session are invisible to
+        # list_indices() due to a LanceDB metadata quirk. We rebuild
+        # with replace=True so the current version can use them.
 
         row_count = table.count_rows()
         if row_count < IVF_NUM_SUB_VECTORS * 8:
@@ -95,12 +104,14 @@ class ChunkStore:
                 num_sub_vectors=IVF_NUM_SUB_VECTORS,
                 index_type="IVF_PQ",
                 name=INDEX_NAME,
+                replace=True,  # overwrite any orphaned index files (LanceDB version skew)
             )
+            self._index_exists = True
         except Exception:
             pass  # non-critical; search still works via exhaustive scan
 
     def _ensure_table(self) -> object | None:
-        """Return the table handle, creating it if missing (no index yet)."""
+        """Return the table handle, or None if the table does not exist."""
         try:
             return self.db.open_table(TABLE_NAME)
         except Exception:
@@ -114,6 +125,7 @@ class ChunkStore:
                 if name == TABLE_NAME:
                     self.db.drop_table(TABLE_NAME)
             self.save_manifest({})
+            self._index_exists = False
 
     def replace_all(self, chunks: list[Chunk], vectors: list[list[float]]) -> None:
         """Replace entire store contents and (re)build the vector index."""
@@ -126,7 +138,8 @@ class ChunkStore:
                 for chunk, vector in zip(chunks, vectors, strict=True)
             ]
             if rows:
-                table = self.db.create_table(TABLE_NAME, pa.Table.from_pylist(rows))
+                self.db.create_table(TABLE_NAME, pa.Table.from_pylist(rows))
+                self._index_exists = False
                 self._ensure_index()
 
     # ── Incremental mutations (index-preserving) ─────────────────────
@@ -153,8 +166,9 @@ class ChunkStore:
 
             existing = self._ensure_table()
             if existing is None:
-                # First write — create table (index deferred until enough rows)
+                # First write — create table, build index if enough rows
                 self.db.create_table(TABLE_NAME, new_table)
+                self._ensure_index()
                 return
 
             # Use merge_insert: match on path column, insert or update
@@ -162,6 +176,7 @@ class ChunkStore:
             merge.when_not_matched_insert_all()
             merge.when_matched_update_all()
             merge.execute(new_table)
+            self._ensure_index()
 
     def rename_path(self, old_path: str, new_path: str) -> int:
         """Rename path in all chunks. Preserves the index."""
