@@ -91,7 +91,21 @@ def translate_zh_to_en(text: str) -> str:
     if len(masked) <= _MT_MAX_CHARS:
         return _translate_one(masked, protected)
 
+    # Split on paragraph boundaries (double newlines or more)
     parts = re.split(r"(\n\n+)", text)
+    # Guard: if the split didn't actually break the text apart, fall back to
+    # character-window chunking so we always make progress.
+    if len(parts) == 1:
+        out: list[str] = []
+        for start in range(0, len(text), _MT_MAX_CHARS):
+            chunk = text[start : start + _MT_MAX_CHARS]
+            if needs_translation(chunk):
+                masked_chunk, prot = _mask_protected(chunk)
+                out.append(_translate_one(masked_chunk, prot))
+            else:
+                out.append(chunk)
+        return "".join(out)
+
     out: list[str] = []
     for part in parts:
         if not part or re.fullmatch(r"\n+", part):
