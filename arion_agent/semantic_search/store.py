@@ -32,6 +32,7 @@ class ChunkStore:
         self.db = lancedb.connect(str(index_dir / "lance"))
         self.manifest_path = index_dir / "manifest.json"
         self._write_lock = threading.Lock()
+        self._index_lock = threading.Lock()
         self._index_exists = False
 
     # ── Manifest management ──────────────────────────────────────────
@@ -79,36 +80,39 @@ class ChunkStore:
         """Create IVF_PQ index on the vector column if it does not exist."""
         if self._index_exists:
             return
-        try:
-            table = self.db.open_table(TABLE_NAME)
-        except Exception:
-            return
-        # LanceDB 0.33 list_indices() is session-local — a recognized
-        # index in this session means it was created (or verified) here.
-        existing = [idx.name for idx in table.list_indices()]
-        if INDEX_NAME in existing:
-            self._index_exists = True
-            return
-        # On-disk index files from a prior session are invisible to
-        # list_indices() due to a LanceDB metadata quirk. We rebuild
-        # with replace=True so the current version can use them.
+        with self._index_lock:
+            if self._index_exists:
+                return
+            try:
+                table = self.db.open_table(TABLE_NAME)
+            except Exception:
+                return
+            # LanceDB 0.33 list_indices() is session-local — a recognized
+            # index in this session means it was created (or verified) here.
+            existing = [idx.name for idx in table.list_indices()]
+            if INDEX_NAME in existing:
+                self._index_exists = True
+                return
+            # On-disk index files from a prior session are invisible to
+            # list_indices() due to a LanceDB metadata quirk. We rebuild
+            # with replace=True so the current version can use them.
 
-        row_count = table.count_rows()
-        if row_count < IVF_NUM_SUB_VECTORS * 8:
-            return  # too few rows for PQ training — skip until we have enough
+            row_count = table.count_rows()
+            if row_count < IVF_NUM_SUB_VECTORS * 8:
+                return  # too few rows for PQ training — skip until we have enough
 
-        try:
-            table.create_index(
-                metric="cosine",
-                num_partitions=min(IVF_NUM_PARTITIONS, row_count // 4),
-                num_sub_vectors=IVF_NUM_SUB_VECTORS,
-                index_type="IVF_PQ",
-                name=INDEX_NAME,
-                replace=True,  # overwrite any orphaned index files (LanceDB version skew)
-            )
-            self._index_exists = True
-        except Exception:
-            pass  # non-critical; search still works via exhaustive scan
+            try:
+                table.create_index(
+                    metric="cosine",
+                    num_partitions=min(IVF_NUM_PARTITIONS, row_count // 4),
+                    num_sub_vectors=IVF_NUM_SUB_VECTORS,
+                    index_type="IVF_PQ",
+                    name=INDEX_NAME,
+                    replace=True,  # overwrite any orphaned index files (LanceDB version skew)
+                )
+                self._index_exists = True
+            except Exception:
+                pass  # non-critical; search still works via exhaustive scan
 
     def _ensure_table(self) -> object | None:
         """Return the table handle, or None if the table does not exist."""

@@ -111,9 +111,6 @@ DEFAULT_IGNORE_PATTERNS: tuple[str, ...] = (
     "package-lock.json",
     "pnpm-lock.yaml",
     "yarn.lock",
-    # Common Desktop deploy checkouts (Mac: workspace = ~/Desktop)
-    "ArionAgentProd/",
-    "ArionAgentDev/",
 )
 
 

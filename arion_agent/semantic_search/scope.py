@@ -213,7 +213,7 @@ def should_prune_directory(
         return True
 
     if should_ignore(norm, patterns) or should_ignore(f"{norm}/", patterns):
-        if subtree_might_match(norm, allow) or subtree_might_match(norm, only):
+        if subtree_might_match(norm, allow):
             return False
         return True
 

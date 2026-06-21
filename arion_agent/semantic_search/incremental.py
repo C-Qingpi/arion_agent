@@ -97,20 +97,14 @@ class IncrementalIndexer:
     def ensure_running(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        thread_was_dead = self._thread is not None and not self._thread.is_alive()
         self._clear_queue()
         with self._lock:
             self._pending.clear()
-        manifest = self._store.load_manifest()
-        disk_manifest = scan_manifest(self._workspace, self._index_scope)
-        if thread_was_dead and len(manifest) < len(disk_manifest):
-            self._initial_sync_done = False
+        # Always resync on thread start — scan_manifest and _vector_cache
+        # happen inside _run() so the caller is not blocked.
+        self._initial_sync_done = False
         self._running = True
         self._last_error = None
-        self._vector_cache = {
-            row.get("search_text_hash") or row["content_hash"]: row["vector"]
-            for row in self._store.all_rows()
-        }
         self._thread = threading.Thread(target=self._run, name="semantic-indexer", daemon=True)
         self._thread.start()
 
@@ -229,6 +223,12 @@ class IncrementalIndexer:
 
     def _run(self) -> None:
         try:
+            # Load existing vectors so unchanged files skip re-embedding.
+            # Moved here from ensure_running() to avoid blocking the caller.
+            self._vector_cache = {
+                row.get("search_text_hash") or row["content_hash"]: row["vector"]
+                for row in self._store.all_rows()
+            }
             # Ensure index exists even if resuming after a crash/restart
             # where bootstrap already completed in a previous session
             self._store._ensure_index()
