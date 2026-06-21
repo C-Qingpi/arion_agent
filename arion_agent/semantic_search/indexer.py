@@ -171,8 +171,7 @@ def apply_renames(
 
 
 def apply_removals(store: ChunkStore, removals: list[str]) -> None:
-    for path in removals:
-        store.delete_by_path(path)
+    store.delete_by_paths(removals)
     if removals:
         store.remove_manifest_entries(removals)
 

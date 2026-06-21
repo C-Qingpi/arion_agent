@@ -250,6 +250,10 @@ def path_matches_glob(path: str, glob_pattern: str) -> bool:
         prefix = pattern[:-3].strip("/")
         return norm == prefix or norm.startswith(prefix + "/")
     if "**" in pattern:
+        # pathlib's ** requires at least one directory component.
+        # "**/*.md" won't match root-level "readme.md" without this.
+        if "/" not in norm:
+            return PurePosixPath(f"_/{norm}").match(pattern)
         return PurePosixPath(norm).match(pattern)
     return fnmatch.fnmatch(norm, pattern)
 

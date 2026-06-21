@@ -156,6 +156,25 @@ class ChunkStore:
                 return
             table.delete(f"path = {quote_literal(path)}")
 
+    def delete_by_paths(self, paths: list[str]) -> None:
+        """Delete all chunks for multiple file paths in one batched query.
+
+        Batches into groups of 500 to avoid excessively long query strings.
+        """
+        if not paths:
+            return
+        with self._write_lock:
+            table = self._ensure_table()
+            if table is None:
+                return
+            batch_size = 500
+            for i in range(0, len(paths), batch_size):
+                batch = paths[i : i + batch_size]
+                predicate = " OR ".join(
+                    f"path = {quote_literal(p)}" for p in batch
+                )
+                table.delete(predicate)
+
     def upsert_file(self, chunks: list[Chunk], vectors: list[list[float]]) -> None:
         """Upsert all chunks for a single file path. Preserves the index."""
         if not chunks:
