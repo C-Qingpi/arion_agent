@@ -103,26 +103,36 @@ def _glob_to_sql_like(pattern: str) -> str | None:
     Returns ``None`` for complex patterns that cannot be expressed as LIKE.
     """
     p = pattern.strip()
+    if not p:
+        return None
 
-    # dir/** or dir/subdir/** → dir/% or dir/subdir/%
+    # prefix/**/*.ext → prefix/%.ext  (most common: src/**/*.py)
+    m = re.match(r"^(.+)/\*\*/\*\.(\w+)$", p)
+    if m:
+        return f"{m.group(1)}/%.{m.group(2)}"
+
+    # dir/** → dir/%
     if p.endswith("/**"):
         return p[:-3] + "/%"
 
     # **/*.ext → %.ext
     if p.startswith("**/"):
         rest = p[3:]
-        if "/" not in rest:
-            return f"%{rest}"
-        return None  # too complex, use post-filter
+        # only simple: **/*.py → %.py; reject **/* or **/foo/bar
+        if "/" not in rest and rest.startswith("*."):
+            return f"%{rest[1:]}"
+        return None
 
     # *.ext → %.ext
     if p.startswith("*."):
         return f"%{p[1:]}"
 
-    # src/*.py → src/%.py
-    if "/*." in p:
+    # src/*.py → src/%.py  (single-level wildcard, no ** in prefix)
+    if "/*." in p and "**" not in p:
         prefix, suffix = p.split("/*.", 1)
-        return f"{prefix}/%.{suffix}"
+        if "*" not in prefix:
+            return f"{prefix}/%.{suffix}"
+        return None
 
     # No wildcards → exact match
     if "*" not in p and "?" not in p:
