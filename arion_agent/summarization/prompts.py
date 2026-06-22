@@ -108,6 +108,13 @@ of what just transpired before it can act on open items. Include verbatim \
 fragments of critical user instructions and agent observations where they \
 convey precise meaning.
 
+## Hard Earned Lessons
+Lessons learned the hard way during this session — mistakes, surprises, \
+dead ends, and insights that the successor must remember to avoid repeating. \
+Record root causes, not symptoms. Include both technical (bug patterns, \
+tool behavior, configuration gotchas) and process (workflow pitfalls, \
+assumptions that proved wrong).
+
 ## Full History Trajectories
 Carry history forward — a successor reading only this section should \
 understand how the work evolved over time.
@@ -268,6 +275,12 @@ This is narrative, not a list — the successor must understand the full arc \
 of recent activity before it can act on open items. Include verbatim \
 fragments of critical instructions and observations where they convey \
 precise meaning.
+
+## Hard Earned Lessons
+Lessons learned the hard way during this operational period — mistakes, \
+surprises, dead ends, and insights that the successor must remember to \
+avoid repeating. Record root causes, not symptoms. Include both technical \
+and process lessons.
 
 ## Full History Trajectories
 Carry history forward — chronological arc of recent operational activity.
