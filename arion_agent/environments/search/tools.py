@@ -39,11 +39,58 @@ def _index_status_line(st: IndexerStatus) -> str:
     return f"ℹ️ Searched {st.indexed_files} files — index fully built"
 
 
-def format_empty_search_message(st: IndexerStatus) -> str:
-    """Explain why semantic_search returned no hits (startup vs partial vs truly empty)."""
+def format_empty_search_message(
+    st: IndexerStatus,
+    *,
+    filter_matched: int | None = None,
+    filter_total: int | None = None,
+    path_glob: str | None = None,
+    target_directories: list[str] | None = None,
+) -> str:
+    """Explain why semantic_search returned no hits (startup vs partial vs truly empty).
+
+    When filter_matched and filter_total are provided, they tell the agent how many
+    indexed files match the current path_glob/target_directories filters — zero
+    filter matches usually means the agent used a wrong filter syntax (e.g. bare
+    filename instead of **/filename).
+    """
     status = _index_status_line(st)
     if st.last_error:
         return f"{status}\nTry fixing the error and retrying."
+
+    # ── Filter diagnostic (zero matches due to filters, not query) ──
+    if (
+        filter_matched is not None
+        and filter_total is not None
+        and filter_total > 0
+        and filter_matched == 0
+        and (path_glob or target_directories)
+    ):
+        hint_parts: list[str] = []
+        # Check for bare filename mistake
+        if path_glob and "*" not in path_glob and "/" not in path_glob:
+            hint_parts.append(
+                f'path_glob "{path_glob}" is a bare filename — use "**/{path_glob}" '
+                "to match files in subdirectories"
+            )
+        elif path_glob and "/" in path_glob and not path_glob.startswith("**"):
+            hint_parts.append(
+                f'path_glob lacks **/ prefix — try "**/{path_glob}" to match anywhere'
+            )
+        elif target_directories and not path_glob:
+            hint_parts.append(
+                f"no indexed files under {target_directories} — check directory path"
+            )
+        else:
+            hint_parts.append("no indexed files match these filters")
+        hint = "\n   Hint: " + "; ".join(hint_parts)
+
+        return (
+            f"No results with current filters.\n"
+            f"   {filter_matched} of {filter_total} indexed files matched "
+            f"{_describe_filters(target_directories, path_glob)}{hint}\n"
+            f"   {status}"
+        )
 
     if not st.thread_alive and st.indexed_files < st.total_files:
         return (
@@ -74,7 +121,32 @@ def format_empty_search_message(st: IndexerStatus) -> str:
             "Try a broader query, or wait for more files to finish indexing and retry."
         )
 
+    # ── Filter matched files exist but query got no semantic hits ──
+    if (
+        filter_matched is not None
+        and filter_matched > 0
+        and (path_glob or target_directories)
+    ):
+        return (
+            f"No results.\n"
+            f"   {filter_matched} files matched filters but no semantic hits — "
+            f"try a broader query or adjust filters\n"
+            f"   {status}"
+        )
+
     return f"No results.\n{status}"
+
+
+def _describe_filters(
+    target_directories: list[str] | None,
+    path_glob: str | None,
+) -> str:
+    parts: list[str] = []
+    if path_glob:
+        parts.append(f'path_glob="{path_glob}"')
+    if target_directories:
+        parts.append(f"target_directories={target_directories}")
+    return f"({', '.join(parts)})" if parts else "(no filters)"
 
 
 def _format_hits(results, st: IndexerStatus | None) -> str:
@@ -122,9 +194,17 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
         ] = None,
         num_results: Annotated[int, "Max results to return (1-25)"] = default_num_results,
     ) -> str:
-        """Semantic search over workspace files by meaning, not exact text.
+        """Semantic search over workspace files by meaning, not exact keywords.
 
-        Prefer narrow target_directories and path_glob before a workspace-wide query.
+        Use to locate code, documentation, or configuration related to a concept.
+        Begin with a 3-8 word query using project-specific terms, then narrow
+        with path_glob or target_directories.
+
+        path_glob requires **/ prefix to match subdirectories.
+        "**/*.py" matches all Python files; "run.py" only matches at root.
+        For CODE: include function/class names ("build_report function").
+        For DOCS: describe the concept ("architecture design pipeline").
+        Scores above 0.7 are relevant; above 1.0 are precise matches.
         Returns path, line range, and snippet for each hit, plus an index status
         line indicating how much of the workspace was searched. Indexing runs in the
         background; results improve as more files are indexed.
@@ -158,7 +238,17 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
                 st = service.status()
 
         if not results:
-            return format_empty_search_message(st)
+            filter_matched, filter_total = service.count_filter_match_paths(
+                target_directories=target_directories or None,
+                path_glob=path_glob,
+            )
+            return format_empty_search_message(
+                st,
+                filter_matched=filter_matched,
+                filter_total=filter_total,
+                path_glob=path_glob,
+                target_directories=target_directories or None,
+            )
 
         return _format_hits(results, st)
 

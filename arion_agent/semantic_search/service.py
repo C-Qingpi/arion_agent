@@ -14,7 +14,7 @@ def _warmup_models() -> None:
     warmup_mt()
 from arion_agent.semantic_search.incremental import IncrementalIndexer, IndexerStatus
 from arion_agent.semantic_search.scope import resolve_index_scope
-from arion_agent.semantic_search.retriever import SearchResult, hybrid_search
+from arion_agent.semantic_search.retriever import SearchResult, count_paths_with_filters, hybrid_search
 from arion_agent.semantic_search.store import ChunkStore
 from arion_agent.semantic_search.watcher import WorkspaceWatcher
 
@@ -132,3 +132,20 @@ class SearchService:
             self._workspace,
             extra_ignore=self._config.extra_ignore,
         ).patterns
+
+    def count_filter_match_paths(
+        self,
+        *,
+        target_directories: list[str] | None = None,
+        path_glob: str | None = None,
+    ) -> tuple[int, int]:
+        """Return (matching_paths, total_paths) for the given filter combination.
+
+        Useful for no-results diagnostics — tells the agent whether zero
+        results came from the query or from the filters.
+        """
+        return count_paths_with_filters(
+            self._store,
+            target_directories=target_directories,
+            path_glob=path_glob,
+        )

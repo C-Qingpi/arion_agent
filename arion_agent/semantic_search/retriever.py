@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,7 @@ from arion_agent.semantic_search.config import (
 )
 from arion_agent.semantic_search.embedder import get_embedder
 from arion_agent.semantic_search.ignore import path_matches_glob
-from arion_agent.semantic_search.store import ChunkStore, quote_literal
+from arion_agent.semantic_search.store import TABLE_NAME, ChunkStore, quote_literal
 from arion_agent.semantic_search.translate import prepare_search_text
 
 
@@ -158,6 +159,65 @@ def _post_filter(row, target_directories: list[str] | None, path_glob: str | Non
             return False
 
     return True
+
+
+# ── Filter diagnostic ────────────────────────────────────────────────
+
+def count_paths_with_filters(
+    store: ChunkStore,
+    *,
+    target_directories: list[str] | None = None,
+    path_glob: str | None = None,
+) -> tuple[int, int]:
+    """Count how many distinct indexed paths match the given filters.
+
+    Returns (matching_distinct_paths, total_distinct_paths).
+    Used by the no-results diagnostic to help agents understand why a
+    search returned nothing.
+    """
+    if not store.has_table():
+        return 0, 0
+
+    try:
+        tbl = store.db.open_table(TABLE_NAME)
+    except Exception:
+        return 0, 0
+
+    all_paths: list[str] = tbl.to_lance().scanner(
+        columns=["path"]
+    ).to_table().column("path").to_pylist()
+    total_distinct = len(set(all_paths))
+
+    if not target_directories and not path_glob:
+        return total_distinct, total_distinct
+
+    distinct = set(all_paths)
+
+    # ── Target directories ───────────────────────────────────────────
+    if target_directories:
+        filtered: set[str] = set()
+        for path in distinct:
+            norm = path.replace("\\", "/").lower()
+            for d in target_directories:
+                d_norm = d.strip("./ ").rstrip("/").lower() + "/"
+                if norm.startswith(d_norm):
+                    filtered.add(path)
+                    break
+        distinct = filtered
+
+    # ── Path glob (same logic as _post_filter) ───────────────────────
+    if path_glob:
+        like = _glob_to_sql_like(path_glob)
+        if like is not None:
+            distinct = {p for p in distinct if fnmatch.fnmatch(p.lower(), like.lower())}
+        else:
+            distinct = {
+                p
+                for p in distinct
+                if path_matches_glob(p.lower(), path_glob.lower())
+            }
+
+    return len(distinct), total_distinct
 
 
 # ── Score helpers ────────────────────────────────────────────────────
