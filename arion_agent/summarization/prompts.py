@@ -57,14 +57,16 @@ rewrite compaction templates" is useful. "Updated some prompts" is not.
 Structure the briefing using these sections. Populate each with relevant \
 information or write "None" if nothing to report.
 
-## SESSION CONTEXT
+# BACKGROUND
+
+## Session Context
 Why this work exists and what we are trying to accomplish overall.
 - Background, motivation, and success criteria from the user's perspective
 - Standing constraints, preferences, or non-negotiables the user expressed
 - Tone, urgency, scope boundaries, and nuances in how the user framed the work
 - Multiple concurrent goals or pivots — capture all that still matter
 
-## RECENT USER REQUESTS (VERBATIM)
+## Recent User Requests (Verbatim)
 Reproduce the exact text of the latest three substantive user messages \
 (semantic requests — instructions, questions, corrections, specifications).
 - Skip trivial prompts such as: continue, ok, yes, go on, thanks, proceed, \
@@ -73,27 +75,19 @@ got it, and other one-line acknowledgments with no new intent
 - For older user requests beyond those three: one-line summaries only, \
 preserving any constraints or wording that still governs the work
 
-## ACTIVE WORK & STATUS
+## Active Work & Status
 Enumerate current requests or tasks. For each:
 - What was asked (specific enough to act on)
 - Current status (in_progress, pending, blocked, completed)
 - Dependencies, blockers, or waiting-on items
 - Key constraints or preferences tied to that task
 
-## PROGRESS & DECISIONS
+## Progress & Decisions
 Actions taken, results obtained, and decisions made. For each significant \
 decision, include rationale and rejected alternatives. This is what the \
 successor relies on most to avoid redoing work.
 
-## FULL HISTORY TRAJECTORIES
-Carry history forward — a successor reading only this section should \
-understand how the work evolved over time.
-- Chronological phases, pivots, retries, and dead ends in order
-- What was tried, what failed or was abandoned, and why direction changed
-- Merge in relevant arcs from any previous compaction so history is not lost
-- Name the trajectory (e.g. "initial refactor", "debug loop", "user pivot to X")
-
-## SKILLS & GUIDELINES
+## Skills & Guidelines
 Skills, rules, and operating guidelines the successor must keep following.
 - Skill-specific workflows invoked or required during this session
 - User rules, pinned instructions, and constraints that were active
@@ -103,9 +97,40 @@ Skills, rules, and operating guidelines the successor must keep following.
 Configured skills at compaction time:
 {configured_skills}
 
-## ARTIFACTS
+# HISTORY
 
-### Project record & index files
+## Recent Compression Trajectory
+Spend 300–500 words paraphrasing the conversation being summarized in this \
+compaction. Tell the story: what the user asked, what the agent did, what \
+was discovered, what decisions were reached, and how the work progressed. \
+This is narrative, not a list — the successor must understand the full arc \
+of what just transpired before it can act on open items. Include verbatim \
+fragments of critical user instructions and agent observations where they \
+convey precise meaning.
+
+## Full History Trajectories
+Carry history forward — a successor reading only this section should \
+understand how the work evolved over time.
+- Chronological phases, pivots, retries, and dead ends in order
+- What was tried, what failed or was abandoned, and why direction changed
+- Merge in relevant arcs from any previous compaction so history is not lost
+- Name the trajectory (e.g. "initial refactor", "debug loop", "user pivot to X")
+
+# NEXT STEPS
+
+## Open Items
+Unfinished work, unresolved questions, known issues. For each:
+- Description and current state
+- Status: [XX%, status] where status is pending/in_progress/blocked
+- Blockers or dependencies
+- What the successor should do about it
+
+## Immediate Next Steps
+What should the successor do first? What was in progress or already planned?
+
+# WORKSPACE
+
+## Project Record & Index Files
 Files used to document progress, orient newcomers, or index the workspace \
 (e.g. README.md, PROJECT.md, CHANGELOG, NOTES, docs/plan.md).
 For each:
@@ -114,33 +139,36 @@ For each:
 - What was last written or updated there
 - What the successor should read or update first
 
-### Other artifacts
-Everything else material to continuing: source files, configs, scripts, \
-outputs, datasets, logs, test fixtures, generated assets.
-For each:
+## Project Workspace Tree
+Describe the directory structure of the project workspace. If multiple \
+projects or repositories exist, enumerate each with its root path and \
+purpose. Include relevant subdirectory layouts that the successor needs \
+to navigate.
+
+## Recently Edited Files or Files of Interest
+Files that were modified, created, or examined during this session. For each:
 - Exact path
 - What changed or was created
 - Current state (working / broken / partial / untested)
+- Why the successor should care
 
 Also note notable commands run and their important stdout/stderr, plus \
 specific values, configurations, or parameters that were set.
 
-## EVIDENCE, SOURCES & REFERENCES
-For research-heavy work: data sources, citations, papers, findings.
+## Key read_file Actions
+Files read during this session whose contents are evicted in this \
+compression but remain relevant to ongoing tasks. For each:
+- Exact path
+- What was learned from reading it
+- Why the successor might need to re-read it
+
+## Evidences, Sources, & References
+Data sources, citations, findings, and references that are evicted in \
+this compression but still relevant to ongoing tasks.
 - URLs for web sources
 - Local file paths for evidence in workspace
 - DOIs, PMIDs, or other identifiers
 - Key data points and provenance
-
-## OPEN ITEMS
-Unfinished work, unresolved questions, known issues. For each:
-- Description and current state
-- Status: [XX%, status] where status is pending/in_progress/blocked
-- Blockers or dependencies
-- What the successor should do about it
-
-## NEXT STEPS
-What should the successor do first? What was in progress or already planned?
 {optional_sections}
 </instructions>
 
@@ -193,14 +221,16 @@ nuance, not just the topic label.
 Structure the briefing using these sections. Populate each with relevant \
 information or write "None" if nothing to report.
 
-## SESSION CONTEXT
+# BACKGROUND
+
+## Session Context
 Why the agent is operating and what mission or standing duties are active.
 - Operational mode, heartbeat objectives, or standing responsibilities
 - Background and success criteria for any user-facing work in flight
 - User tone, constraints, and phrasing nuances that still govern behavior
 - If serving multiple users or sources, who has pending requests and why
 
-## RECENT USER REQUESTS (VERBATIM)
+## Recent User Requests (Verbatim)
 Reproduce the exact text of the latest three substantive user messages \
 (semantic requests — instructions, questions, corrections, specifications).
 - Skip trivial prompts such as: continue, ok, yes, go on, thanks, proceed, \
@@ -208,25 +238,18 @@ got it, and other one-line acknowledgments with no new intent
 - Label each verbatim block with approximate position (most recent last)
 - For older user requests beyond those three: one-line summaries only
 
-## ACTIVE WORK & STATUS
+## Active Work & Status
 Current requests or tasks. For each:
 - What was asked (specific enough to act on)
 - Current status (in_progress, pending, blocked, completed)
 - Priority, dependencies, blockers
 - Constraints the user or system expressed
 
-## PROGRESS & DECISIONS
+## Progress & Decisions
 Key events, actions taken, and decisions since the last compaction. Include \
 rationale and rejected alternatives. Note environment or objective changes.
 
-## FULL HISTORY TRAJECTORIES
-Carry history forward — chronological arc of recent operational activity.
-- Phases, pivots, retries, and dead ends in order
-- What was tried, what failed, and why direction changed
-- Merge relevant arcs from any previous compaction
-- Standing loops or recurring duties and how they evolved
-
-## SKILLS & GUIDELINES
+## Skills & Guidelines
 Skills, rules, and operating guidelines the successor must keep following.
 - Skill-specific workflows invoked or required during this period
 - User rules, pinned instructions, and identity constraints in effect
@@ -235,9 +258,40 @@ Skills, rules, and operating guidelines the successor must keep following.
 Configured skills at compaction time:
 {configured_skills}
 
-## ARTIFACTS
+# HISTORY
 
-### Project record & index files
+## Recent Compression Trajectory
+Spend 300–500 words paraphrasing the operational activity being summarized \
+in this compaction. Tell the story: what happened, what the agent did, what \
+was observed, what decisions were reached, and how operations progressed. \
+This is narrative, not a list — the successor must understand the full arc \
+of recent activity before it can act on open items. Include verbatim \
+fragments of critical instructions and observations where they convey \
+precise meaning.
+
+## Full History Trajectories
+Carry history forward — chronological arc of recent operational activity.
+- Phases, pivots, retries, and dead ends in order
+- What was tried, what failed, and why direction changed
+- Merge relevant arcs from any previous compaction
+- Standing loops or recurring duties and how they evolved
+
+# NEXT STEPS
+
+## Open Items
+Unfinished work, unresolved questions, known issues. For each:
+- Description and current state
+- Status: [XX%, status] where status is pending/in_progress/blocked
+- Blockers or dependencies
+- What the successor should do about it
+
+## Immediate Next Steps
+What should the successor do first? Pending duties, scheduled actions, \
+queued requests, or time-sensitive items.
+
+# WORKSPACE
+
+## Project Record & Index Files
 Files used to document progress, orient newcomers, or index the workspace \
 (e.g. README.md, PROJECT.md, CHANGELOG, runbooks, status docs).
 For each:
@@ -246,32 +300,34 @@ For each:
 - What was last written or updated there
 - What the successor should read or update first
 
-### Other artifacts
-Everything else material to continuing: source files, configs, scripts, \
-outputs, datasets, logs, monitoring artifacts.
-For each:
+## Project Workspace Tree
+Describe the directory structure of the project workspace. If multiple \
+projects or repositories exist, enumerate each with its root path and \
+purpose. Include relevant subdirectory layouts that the successor needs \
+to navigate.
+
+## Recently Edited Files or Files of Interest
+Files that were modified, created, or examined during this period. For each:
 - Exact path
 - What changed or was created
 - Current state
+- Why the successor should care
 
 Also note notable commands run and important outputs, plus configurations \
 or parameters that were set.
 
-## EVIDENCE, SOURCES & REFERENCES
-For research or investigative work:
+## Key read_file Actions
+Files read during this period whose contents are evicted in this \
+compaction but remain relevant to ongoing operations. For each:
+- Exact path
+- What was learned from reading it
+- Why the successor might need to re-read it
+
+## Evidences, Sources, & References
+Data sources, citations, findings, and references that are evicted in \
+this compaction but still relevant to ongoing operations.
 - URLs, local paths, identifiers (DOI, PMID, etc.)
 - Key data points, provenance, reasoning chains behind conclusions
-
-## OPEN ITEMS
-Unfinished work, unresolved questions, known issues. For each:
-- Description and current state
-- Status: [XX%, status] where status is pending/in_progress/blocked
-- Blockers or dependencies
-- What the successor should do about it
-
-## NEXT STEPS
-What should the successor do first? Pending duties, scheduled actions, \
-queued requests, or time-sensitive items.
 {optional_sections}
 </instructions>
 
