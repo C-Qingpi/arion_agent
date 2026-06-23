@@ -1,6 +1,6 @@
 [project]
 name = "arion-agent"
-version = "0.4.4"
+version = "0.5.0"
 description = "Modular agentic framework with ReAct loop, multi-provider support, persistent sessions, agent identity, summarization, subagenting, skills, and extensible middleware."
 readme = "README.md"
 license = { text = "MIT" }
