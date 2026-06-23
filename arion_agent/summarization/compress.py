@@ -558,6 +558,81 @@ def _plan_compression(
     return cutoff, messages_to_evict, messages_to_keep
 
 
+def _value_to_natural(v: Any, max_str: int = 120) -> str:
+    """Convert an arbitrary JSON value to natural language prose.
+
+    No brackets, braces, quotes or JSON-like syntax — only plain ``key is value``.
+    Nested structures are flattened to a depth of 1; long strings truncated.
+    """
+    if v is None:
+        return "nothing"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        if len(v) > max_str:
+            return v[:max_str] + "..."
+        return v
+    if isinstance(v, (list, tuple)):
+        if not v:
+            return "nothing"
+        items = [_value_to_natural(x, max_str) for x in v[:3]]
+        tail = f", and {len(v)-3} more" if len(v) > 3 else ""
+        return ", ".join(items) + tail
+    if isinstance(v, dict):
+        parts = []
+        for k, val in v.items():
+            parts.append(f"{k} is {_value_to_natural(val, max_str)}")
+        if len(parts) <= 4:
+            return "; ".join(parts)
+        return "; ".join(parts[:4]) + f"; and {len(parts)-4} more fields..."
+    return str(v)[:max_str]
+
+
+def _sanitize_messages_for_summary(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """Replace raw tool call JSON with natural-language labels.
+
+    Raw tool call blocks (e.g. ``[{'name': 'shell_run', ...}]``) trigger
+    agentic continuation in the summary model.  We rewrite them using a
+    general ``key is value`` form that preserves all information while
+    removing every trace of JSON syntax::
+
+        Agent called tool shell_run: command is kill ..., cwd is final_exam_standalone
+
+    The conversion is schema-free — any tool name and any argument shape
+    are handled automatically.  Existing text content on the message is preserved.
+    """
+    sanitized: list[AnyMessage] = []
+    for msg in messages:
+        if not isinstance(msg, AIMessage):
+            sanitized.append(msg)
+            continue
+        tcs = getattr(msg, "tool_calls", None) or []
+        if not tcs:
+            sanitized.append(msg)
+            continue
+        content_parts: list[str] = []
+        text_content = str(msg.content) if msg.content else ""
+        if text_content.strip():
+            content_parts.append(text_content.strip())
+        for tc in tcs:
+            name = tc.get("name", "unknown")
+            args = tc.get("args", {})
+            if args:
+                arg_parts = []
+                for k, v in args.items():
+                    arg_parts.append(f"{k} is {_value_to_natural(v)}")
+                content_parts.append(f"Agent called tool {name}: {'; '.join(arg_parts)}")
+            else:
+                content_parts.append(f"Agent called tool {name}")
+        if content_parts:
+            sanitized.append(AIMessage(content="\n".join(content_parts)))
+        else:
+            sanitized.append(msg)
+    return sanitized
+
+
 def _build_summary_prompt(
     *,
     messages_to_evict: list[AnyMessage],
@@ -574,6 +649,7 @@ def _build_summary_prompt(
         keep=0,
         max_length=effective_max_length,
     )
+    evict_for_summary = _sanitize_messages_for_summary(evict_for_summary)
     formatted_messages = get_buffer_string(evict_for_summary)
 
     from arion_agent.summarization.sections import (
@@ -607,6 +683,11 @@ def _build_summary_prompt(
             f"{previous_summary_raw}\n\n"
             f"{prompt_text}"
         )
+    prompt_text += (
+        "\n\nCRITICAL: You are a ONE-SHOT SUMMARIZER, not an agent. "
+        "Do NOT emit tool calls. Do NOT continue the conversation. "
+        "Only produce the specified structured summary format."
+    )
     return prompt_text
 
 
