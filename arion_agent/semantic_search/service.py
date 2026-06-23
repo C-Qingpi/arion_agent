@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +13,7 @@ from arion_agent.semantic_search.translate import warmup_mt
 def _warmup_models() -> None:
     get_embedder()
     warmup_mt()
-from arion_agent.semantic_search.incremental import IncrementalIndexer, IndexerStatus
+from arion_agent.semantic_search.incremental import BACKUP_SUFFIX, IncrementalIndexer, IndexerStatus
 from arion_agent.semantic_search.scope import resolve_index_scope
 from arion_agent.semantic_search.retriever import SearchResult, count_paths_with_filters, hybrid_search
 from arion_agent.semantic_search.store import ChunkStore
@@ -113,15 +114,54 @@ class SearchService:
         # _ensure_index is a no-op after the first call, so subsequent
         # queries incur only a cheap boolean check.
         self._store._ensure_index()
+
+        # If the primary store is empty (rebuild in progress), fall back to
+        # the backup index so search remains uninterrupted during a reset.
+        store = self._store
+        if not store.has_table():
+            backup_store = self._try_backup_store()
+            if backup_store is not None:
+                store = backup_store
+
         return hybrid_search(
             query,
-            index_dir=self._index_dir,
-            store=self._store,
+            index_dir=store.index_dir if store is not self._store else self._index_dir,
+            store=store,
             target_directories=target_directories,
             path_glob=path_glob,
             num_results=num_results,
             min_score=min_score,
         )
+
+    def _try_backup_store(self) -> ChunkStore | None:
+        """Return a ChunkStore for the backup index if it exists and has data."""
+        backup_path = self._index_dir.parent / (self._index_dir.name + BACKUP_SUFFIX)
+        if not backup_path.exists():
+            return None
+        try:
+            backup_store = ChunkStore(backup_path)
+            if backup_store.has_table():
+                backup_store._ensure_index()
+                return backup_store
+        except Exception:
+            pass
+        return None
+
+    @property
+    def stale_info(self) -> dict | None:
+        """Read stale_info.json from the backup index dir, if a rebuild is in progress.
+
+        Returns the diff between the old and current workspace at the time the
+        reset was triggered, or None if no backup (no active rebuild).
+        """
+        backup_path = self._index_dir.parent / (self._index_dir.name + BACKUP_SUFFIX)
+        stale_path = backup_path / "stale_info.json"
+        if stale_path.exists():
+            try:
+                return json.loads(stale_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return None
 
     def reset_index(self) -> None:
         self.start()

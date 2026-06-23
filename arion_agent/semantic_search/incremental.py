@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import queue
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -24,6 +26,38 @@ from arion_agent.semantic_search.scope import (
     search_config_mtime,
 )
 from arion_agent.semantic_search.store import ChunkStore
+
+BACKUP_SUFFIX = ".backup"
+
+
+def _compute_and_save_stale_info(
+    workspace: Path,
+    backup_path: Path,
+    index_scope,
+) -> None:
+    """Compute the diff between the backup manifest and the current workspace,
+    and save it as stale_info.json alongside the backup so search can warn the agent."""
+    try:
+        backup_store = ChunkStore(backup_path)
+        old_manifest = backup_store.load_manifest()
+        disk_manifest = scan_manifest(workspace, index_scope)
+
+        sync = plan_sync(workspace, old_manifest, index_scope)
+
+        stale_info = {
+            "stale_count": len(sync.to_index),
+            "missing_count": len(sync.removals),
+            "stale_files": sorted(
+                str(p.relative_to(workspace)) for p in sync.to_index
+            ),
+            "missing_files": sorted(sync.removals),
+            "total_old": len(old_manifest),
+            "total_new": len(disk_manifest),
+        }
+        stale_path = backup_path / "stale_info.json"
+        stale_path.write_text(json.dumps(stale_info, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # non-critical — best-effort stale info
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +205,17 @@ class IncrementalIndexer:
         self._watcher = watcher
 
     def reset_and_resync(self) -> None:
-        self._store.clear()
+        # Atomic swap: back up the old index so search is uninterrupted
+        backup_path = self._store.index_dir.parent / (self._store.index_dir.name + BACKUP_SUFFIX)
+        if self._store.index_dir.exists():
+            if backup_path.exists():
+                shutil.rmtree(backup_path)
+            self._store.index_dir.rename(backup_path)
+        self._store = ChunkStore(self._index_dir)
+
+        # Compute what changed vs the old manifest (best-effort)
+        _compute_and_save_stale_info(self._workspace, backup_path, self._index_scope)
+
         self._index_scope = resolve_index_scope(
             self._workspace,
             extra_ignore=self._extra_ignore,
@@ -278,6 +322,14 @@ class IncrementalIndexer:
 
         self._initial_sync_done = True
         self._store._ensure_index()
+
+        # Initial sync done — delete the backup (new index is live)
+        backup_path = self._store.index_dir.parent / (self._store.index_dir.name + BACKUP_SUFFIX)
+        if backup_path.exists():
+            try:
+                shutil.rmtree(backup_path)
+            except Exception:
+                pass  # non-critical cleanup
 
     def _drain_batch(self) -> list[Path]:
         rels: list[str] = []

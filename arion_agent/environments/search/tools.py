@@ -161,6 +161,37 @@ def _format_hits(results, st: IndexerStatus | None) -> str:
     return "\n".join(lines)
 
 
+def _format_stale_warning(info: dict | None) -> str | None:
+    """Build a preamble about stale index if the backup is in use."""
+    if not info:
+        return None
+    stale = info.get("stale_count", 0)
+    missing = info.get("missing_count", 0)
+    total_old = info.get("total_old", 0)
+
+    parts = [f"⚠️ Using stale search index ({total_old} files) — being rebuilt."]
+
+    if stale > 0:
+        if stale <= 10:
+            files = info.get("stale_files", [])
+            parts.append(f"   {stale} file(s) have changed:")
+            for f in files:
+                parts.append(f"     • {f}")
+        else:
+            parts.append(f"   {stale} files have changed content.")
+
+    if missing > 0:
+        if missing <= 10:
+            files = info.get("missing_files", [])
+            parts.append(f"   {missing} file(s) deleted from workspace:")
+            for f in files:
+                parts.append(f"     • {f}")
+        else:
+            parts.append(f"   {missing} files deleted from workspace.")
+
+    return "\n".join(parts)
+
+
 def _format_status_detail(st: IndexerStatus) -> str:
     """Build a detailed multi-line indexer status report."""
     lines = [
@@ -178,6 +209,18 @@ def _format_status_detail(st: IndexerStatus) -> str:
     if st.last_error:
         lines.append(f"Last error: {st.last_error}")
     return "\n".join(lines)
+
+
+def _backup_status(service) -> str:
+    """Return a line about the backup index if one exists."""
+    backup_path = service.index_dir.parent / (service.index_dir.name + ".backup")
+    if backup_path.exists():
+        stale = service.stale_info
+        if stale:
+            count = stale.get("total_old", 0)
+            return f"ℹ️ Fallback index active ({count} files) — new index building in background"
+        return "ℹ️ Fallback index active — new index building in background"
+    return ""
 
 
 def create_search_tools(service: SearchService, *, min_score: float, default_num_results: int) -> list:
@@ -237,20 +280,30 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
                 results = _run_search()
                 st = service.status()
 
+        # Check if results came from a stale backup index
+        stale_info = service.stale_info
+        stale_note = _format_stale_warning(stale_info)
+
         if not results:
             filter_matched, filter_total = service.count_filter_match_paths(
                 target_directories=target_directories or None,
                 path_glob=path_glob,
             )
-            return format_empty_search_message(
+            msg = format_empty_search_message(
                 st,
                 filter_matched=filter_matched,
                 filter_total=filter_total,
                 path_glob=path_glob,
                 target_directories=target_directories or None,
             )
+            if stale_note:
+                msg = stale_note + "\n" + msg
+            return msg
 
-        return _format_hits(results, st)
+        msg = _format_hits(results, st)
+        if stale_note:
+            msg = stale_note + "\n" + msg
+        return msg
 
     @tool
     def indexer_status() -> str:
@@ -263,19 +316,29 @@ def create_search_tools(service: SearchService, *, min_score: float, default_num
         """
         service.start()
         st = service.status()
-        return _format_status_detail(st)
+        backup_line = _backup_status(service)
+        msg = _format_status_detail(st)
+        if backup_line:
+            msg = backup_line + "\n" + msg
+        return msg
 
     @tool
     def reset_search_index() -> str:
         """Reset and rebuild the semantic search index from scratch.
 
-        Clears all indexed data and starts a fresh scan of the workspace.
+        The old index is preserved as a fallback until the rebuild completes,
+        so searches remain uninterrupted. Once the new index is ready, the
+        fallback is automatically removed.
         Useful when: the index contains stale or incorrect data, search scope
         has changed, or the index is in an unrecoverable error state.
         The rebuild runs in the background; indexer_status reports progress.
         """
         service.reset_index()
         st = service.status()
-        return f"Index cleared and rebuild started.\n{_format_status_detail(st)}"
+        backup_line = _backup_status(service)
+        msg = f"Index rebuild started.\n{_format_status_detail(st)}"
+        if backup_line:
+            msg = backup_line + "\n" + msg
+        return msg
 
     return [semantic_search, indexer_status, reset_search_index]
