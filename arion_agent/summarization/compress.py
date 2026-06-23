@@ -443,6 +443,7 @@ class _PrefetchResult:
     cutoff: int
     message_count: int
     summary_wrapper: str
+    summary_raw_text: str
     evictions: list[Any]
     messages_summarized: int
     messages_kept: int
@@ -560,7 +561,7 @@ def _plan_compression(
 def _build_summary_prompt(
     *,
     messages_to_evict: list[AnyMessage],
-    previous_summary: str,
+    previous_summary_raw: str,
     summary_prompt: str,
     summary_budget: int,
     history_dir: Path | None,
@@ -600,22 +601,76 @@ def _build_summary_prompt(
             f"<messages>\n{formatted_messages}\n</messages>"
         )
 
-    if previous_summary:
+    if previous_summary_raw:
         prompt_text = (
-            f"Previous summary to incorporate:\n{previous_summary}\n\n"
+            f"Previous summary (essential content only; ignore wrapper formatting):\n"
+            f"{previous_summary_raw}\n\n"
             f"{prompt_text}"
         )
     return prompt_text
 
 
-async def _invoke_summary_model(summary_model: BaseChatModel, prompt_text: str) -> str:
+_REQUIRED_SECTION_MARKERS = [
+    "# BACKGROUND",
+    "# HISTORY",
+    "# NEXT STEPS",
+    "# WORKSPACE",
+    "## Session Context",
+    "## Active Work & Status",
+    "## Open Items",
+    "## Immediate Next Steps",
+]
+
+
+def _validate_summary_structure(summary_text: str, min_sections: int = 3) -> bool:
+    """Check that the LLM summary contains enough required template sections."""
+    count = sum(1 for marker in _REQUIRED_SECTION_MARKERS if marker in summary_text)
+    return count >= min_sections
+
+
+async def _invoke_summary_model(
+    summary_model: BaseChatModel,
+    prompt_text: str,
+    *,
+    validate_structure: bool = True,
+    max_retries: int = 3,
+) -> str:
     response = await summary_model.ainvoke(prompt_text)
     raw = response.content if hasattr(response, "content") else str(response)
     if isinstance(raw, list):
-        return "\n".join(
+        raw = "\n".join(
             b.get("text", "") if isinstance(b, dict) else str(b) for b in raw
         )
-    return str(raw)
+    summary_text = str(raw)
+
+    if not validate_structure:
+        return summary_text
+
+    retry_hint = (
+        "\n\n---\n\n"
+        "CRITICAL: Your previous response did NOT follow the required structure. "
+        "You MUST begin with '# BACKGROUND' and include ALL specified sections: "
+        "# BACKGROUND, # HISTORY, # NEXT STEPS, # WORKSPACE. "
+        "This is a structured template — do NOT output raw conversation data."
+    )
+
+    for attempt in range(max_retries):
+        if _validate_summary_structure(summary_text):
+            return summary_text
+        logger.warning(
+            "Summary structure validation failed (attempt %d/%d), retrying...",
+            attempt + 1, max_retries,
+        )
+        retry_prompt = prompt_text + retry_hint
+        response = await summary_model.ainvoke(retry_prompt)
+        raw = response.content if hasattr(response, "content") else str(response)
+        if isinstance(raw, list):
+            raw = "\n".join(
+                b.get("text", "") if isinstance(b, dict) else str(b) for b in raw
+            )
+        summary_text = str(raw)
+
+    return summary_text
 
 
 def _wrap_summary(
@@ -766,7 +821,7 @@ def make_prefetch_node(
         *,
         thread_id: str,
         messages: list[AnyMessage],
-        previous_summary: str,
+        previous_summary_raw: str,
         decision: PolicyDecision,
         cutoff: int,
         messages_to_evict: list[AnyMessage],
@@ -782,7 +837,7 @@ def make_prefetch_node(
 
         prompt_text = _build_summary_prompt(
             messages_to_evict=messages_to_evict,
-            previous_summary=previous_summary,
+            previous_summary_raw=previous_summary_raw,
             summary_prompt=summary_prompt,
             summary_budget=summary_budget,
             history_dir=history_dir,
@@ -809,6 +864,7 @@ def make_prefetch_node(
             cutoff=cutoff,
             message_count=len(messages),
             summary_wrapper=summary_wrapper,
+            summary_raw_text=summary_text,
             evictions=_build_evictions(messages_to_evict),
             messages_summarized=len(messages_to_evict),
             messages_kept=len(messages_to_keep),
@@ -821,7 +877,7 @@ def make_prefetch_node(
         config: RunnableConfig,
     ) -> dict[str, Any]:
         messages = state.get("messages", [])
-        previous_summary = state.get("summary", "")
+        previous_summary_raw = state.get("summary_raw", "")
 
         configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
         thread_id = configurable.get("thread_id", "default")
@@ -859,6 +915,7 @@ def make_prefetch_node(
                 ))
             return {
                 "summary": ready.summary_wrapper,
+                "summary_raw": ready.summary_raw_text,
                 "messages": valid,
             }
 
@@ -885,7 +942,7 @@ def make_prefetch_node(
             return await _run_prefetch(
                 thread_id=thread_id,
                 messages=messages,
-                previous_summary=previous_summary,
+                previous_summary_raw=previous_summary_raw,
                 decision=decision,
                 cutoff=cutoff,
                 messages_to_evict=messages_to_evict,
@@ -944,6 +1001,7 @@ def make_compress_node(
     ) -> dict[str, Any]:
         messages = state.get("messages", [])
         previous_summary = state.get("summary", "")
+        previous_summary_raw = state.get("summary_raw", "")
 
         configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
         thread_id = configurable.get("thread_id", "default")
@@ -952,7 +1010,7 @@ def make_compress_node(
         decision = evaluate_policy(policy, messages, token_count, max_tokens)
 
         if decision is None:
-            return {"messages": [], "summary": previous_summary}
+            return {"messages": [], "summary": previous_summary, "summary_raw": previous_summary_raw}
 
         plan = _plan_compression(
             messages, decision,
@@ -960,13 +1018,13 @@ def make_compress_node(
             max_tokens=max_tokens,
         )
         if plan is None:
-            return {"messages": [], "summary": previous_summary}
+            return {"messages": [], "summary": previous_summary, "summary_raw": previous_summary_raw}
 
         cutoff, messages_to_evict, messages_to_keep = plan
 
         if abort_check is not None and abort_check():
             logger.info("Compression skipped - abort signal received")
-            return {"messages": [], "summary": previous_summary}
+            return {"messages": [], "summary": previous_summary, "summary_raw": previous_summary_raw}
 
         prefetched: _PrefetchResult | None = None
         if registry is not None:
@@ -1003,6 +1061,7 @@ def make_compress_node(
                 ))
             return {
                 "summary": prefetched.summary_wrapper,
+                "summary_raw": prefetched.summary_raw_text,
                 "messages": valid_evictions,
             }
 
@@ -1034,7 +1093,7 @@ def make_compress_node(
                     ))
                 delta_prompt = _build_summary_prompt(
                     messages_to_evict=delta_messages,
-                    previous_summary=prefetched.summary_wrapper,
+                    previous_summary_raw=prefetched.summary_raw_text,
                     summary_prompt=summary_prompt,
                     summary_budget=summary_budget,
                     history_dir=history_dir,
@@ -1047,8 +1106,10 @@ def make_compress_node(
                     wrapper_with_path=wrapper_with_path,
                     wrapper_no_path=wrapper_no_path,
                 )
+                delta_summary_raw = summary_text
             else:
                 wrapper = prefetched.summary_wrapper
+                delta_summary_raw = prefetched.summary_raw_text
 
             evictions = _build_evictions(messages[:cutoff])
             summary_tokens = estimate_tokens(wrapper)
@@ -1067,7 +1128,7 @@ def make_compress_node(
                     file_path=file_path,
                     thread_id=thread_id,
                 ))
-            return {"summary": wrapper, "messages": evictions}
+            return {"summary": wrapper, "summary_raw": delta_summary_raw, "messages": evictions}
 
         file_path: str | None = None
         if history_dir is not None:
@@ -1079,7 +1140,7 @@ def make_compress_node(
 
         prompt_text = _build_summary_prompt(
             messages_to_evict=messages_to_evict,
-            previous_summary=previous_summary,
+            previous_summary_raw=previous_summary_raw,
             summary_prompt=summary_prompt,
             summary_budget=summary_budget,
             history_dir=history_dir,
@@ -1113,7 +1174,7 @@ def make_compress_node(
                     thread_id=thread_id,
                     error="Compression LLM call failed",
                 ))
-            return {"messages": [], "summary": previous_summary}
+            return {"messages": [], "summary": previous_summary, "summary_raw": previous_summary_raw}
 
         wrapper = _wrap_summary(
             summary_text, file_path,
@@ -1142,6 +1203,6 @@ def make_compress_node(
                 thread_id=thread_id,
             ))
 
-        return {"summary": wrapper, "messages": evictions}
+        return {"summary": wrapper, "summary_raw": summary_text, "messages": evictions}
 
     return compress_node

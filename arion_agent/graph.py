@@ -148,10 +148,13 @@ class ArionState(TypedDict):
     """Agent state that flows through the graph.
 
     messages: Conversation messages (add_messages reducer appends/removes).
-    summary: Compressed narrative of evicted messages. Updated by compress node.
+    summary: Wrapped inheritable context (with preamble). Injected to model.
+    summary_raw: Raw LLM summary output (no wrapper). Used as previous_summary
+        in subsequent compactions to avoid wrapper contamination.
     """
     messages: Annotated[list[AnyMessage], add_messages]
     summary: str
+    summary_raw: str
 
 
 # ---------------------------------------------------------------------------
