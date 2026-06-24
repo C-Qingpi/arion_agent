@@ -33,10 +33,10 @@ from pathlib import Path
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\].*?\x07|\x1b[@-_]")
 
 MAX_RUNNING_JOBS = 8
-DEFAULT_READ_LINES = 50
+DEFAULT_READ_LINES = 150
 MAX_READ_LINES = 1000
 MAX_READ_CHARS = 200_000
-START_SETTLE_SECONDS = 2.0
+START_SETTLE_SECONDS = 30.0
 START_SETTLE_POLL = 0.1
 WAIT_POLL_SECONDS = 0.3
 STOP_GRACE_SECONDS = 3.0
@@ -500,7 +500,15 @@ class JobRegistry:
             f"wait job_id={job_id} until_output=...; stop with shell_stop job_id={job_id}.\n"
             f"--- output ---"
         )
-        body = "\n".join(tail) if tail else "(no output yet)"
+        if tail:
+            body = "\n".join(tail)
+        elif st.state == STATE_RUNNING:
+            body = (
+                f"Job still running after {START_SETTLE_SECONDS:.0f}s — now a background job. "
+                f"Use shell_log job_id={job_id} or wait job_id={job_id} to check progress."
+            )
+        else:
+            body = "(no output)"
         return f"{header}\n{body}"
 
     def list_jobs(self) -> str:
@@ -525,7 +533,7 @@ class JobRegistry:
                     parts.append(f"    > {stripped[:120]}")
         return "\n".join(parts)
 
-    def read_log(self, job_id: str, lines: int = DEFAULT_READ_LINES, grep: str = "") -> str:
+    def read_log(self, job_id: str, lines: int = DEFAULT_READ_LINES, grep: str = "", offset: int = 0) -> str:
         st = self.job_state(job_id)
         if st is None:
             return f"Job '{job_id}' not found. Use shell_list to see jobs."
@@ -534,7 +542,14 @@ class JobRegistry:
             all_lines = [ln for ln in all_lines if grep in ln]
         total = len(all_lines)
         if lines <= 0:
-            selected = all_lines
+            if offset > 0:
+                selected = all_lines[offset - 1:]
+            else:
+                selected = all_lines
+        elif offset > 0:
+            start = offset - 1
+            end = start + min(lines, MAX_READ_LINES)
+            selected = all_lines[start:end]
         else:
             selected = all_lines[-min(lines, MAX_READ_LINES):]
         body = "\n".join(selected) if selected else "(no output)"
@@ -543,8 +558,14 @@ class JobRegistry:
             body = "... (truncated)\n" + body
         label = self._state_label(st.state, st.exit_code)
         grep_part = f", grep '{grep}'" if grep else ""
+        offset_part = f", offset={offset}" if offset > 0 else ""
+        range_info = (
+            f"{len(selected)}/{total}"
+            if not offset
+            else f"{len(selected)} lines from offset {offset} of {total}"
+        )
         header = (
-            f"Job '{job_id}' [{label}], showing {len(selected)}/{total} line(s){grep_part}\n"
+            f"Job '{job_id}' [{label}], showing {range_info} line(s){grep_part}{offset_part}\n"
             f"--- output ---"
         )
         return f"{header}\n{body}"

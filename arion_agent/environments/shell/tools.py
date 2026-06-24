@@ -50,9 +50,11 @@ SHELL_TOOL_DESCRIPTIONS: dict[str, str] = {
         "command, and the last log lines. Use to see what is still running and pick a job id."
     ),
     "shell_log": (
-        "Read a job's combined stdout+stderr log (last N lines, default 50). Set lines=0 for the full "
-        "log. Set grep to keep only lines containing that substring. Header shows the job's state and "
-        "exit code."
+        "Read a job's combined stdout+stderr log (default 150 lines, max 1000). "
+        "Set lines=0 for the full log. Set offset=N (1-indexed) for pagination — "
+        "e.g. offset=1,lines=100 for the first 100 lines; offset=200,lines=100 for "
+        "lines 200-299. Set grep to keep only lines containing that substring. "
+        "Header shows the job's state, exit code, and line range."
     ),
     "shell_stop": (
         "Stop a running job. Terminates the command and all processes it spawned (its whole "
@@ -205,10 +207,11 @@ instead so it runs as a background job. Set python_path to use a venv interprete
 
     def shell_log(
         job_id: Annotated[str, "Job id from shell_run / shell_list."],
-        lines: Annotated[int, "Recent lines to show. Default 50, max 1000. Use 0 for the full log."] = 50,
+        lines: Annotated[int, "Lines to show. Default 150, max 1000. Use 0 for the full log."] = 150,
         grep: Annotated[str, "Only show lines containing this substring."] = "",
+        offset: Annotated[int, "1-indexed start line for pagination. 0 (default) = last N lines."] = 0,
     ) -> str:
-        return registry.read_log(job_id, lines=lines, grep=grep)
+        return registry.read_log(job_id, lines=lines, grep=grep, offset=offset)
 
     async def shell_stop(
         job_id: Annotated[str, "Job id to terminate."],

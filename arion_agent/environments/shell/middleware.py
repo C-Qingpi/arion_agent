@@ -23,7 +23,7 @@ Two ways to run code:
 Background job tools:
 - shell_run: start a CLI command as a background job. Returns a job id and first output lines; the command keeps running. Set cwd and description.
 - shell_list: list jobs with id, state (running / exited(code) / stopped), cwd, command, recent output.
-- shell_log: read a job's combined stdout+stderr log (last N lines; lines=0 for full; grep to filter).
+- shell_log: read a job's combined stdout+stderr log (default 150 lines; offset=N for pagination; lines=0 for full; grep to filter).
 - shell_stop: terminate a running job and all processes it spawned (whole tree); nothing is left disowned.
 - wait: pause then return. wait seconds=N sleeps; wait job_id=X blocks until that job exits; wait job_id=X until_output='text' blocks until the job's output contains text. Max 20 minutes per call.
 
@@ -44,7 +44,7 @@ Your working directory is the workspace root; set cwd to the project folder for 
 Run every command as a recoverable background CLI job:
 - shell_run: start a command as a background job (returns job id; keeps running).
 - shell_list: list jobs with state, cwd, command, recent output.
-- shell_log: read a job's stdout+stderr log (last N lines; lines=0 for full; grep to filter).
+- shell_log: read a job's stdout+stderr log (default 150 lines; offset=N for pagination; lines=0 for full; grep to filter).
 - shell_stop: terminate a running job and all processes it spawned (whole tree); nothing is left disowned.
 - wait: wait seconds=N; or wait job_id=X until it exits; or wait job_id=X until_output='text'. Max 20 minutes.
 
