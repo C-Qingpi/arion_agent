@@ -38,6 +38,14 @@ def needs_translation(text: str) -> bool:
 def _load_mt() -> tuple[MarianMTModel, MarianTokenizer]:
     global _model, _tokenizer
     if _model is None or _tokenizer is None:
+        import os
+        from pathlib import Path
+
+        # Cache models alongside the repo so they survive git resets
+        _cache = str(Path(__file__).resolve().parent.parent / "models" / "transformers")
+        os.makedirs(_cache, exist_ok=True)
+        os.environ.setdefault("TRANSFORMERS_CACHE", _cache)
+
         from transformers import MarianMTModel, MarianTokenizer
 
         _tokenizer = MarianTokenizer.from_pretrained(MT_MODEL)

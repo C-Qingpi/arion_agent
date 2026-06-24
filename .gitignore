@@ -9,3 +9,4 @@ to_be_deleted/
 *.log
 *.err
 *.pid
+models/

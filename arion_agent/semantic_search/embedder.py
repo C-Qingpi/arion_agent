@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastembed import TextEmbedding
 
 from arion_agent.semantic_search.config import EMBED_BATCH_SIZE, EMBED_MODEL
 
 _embedder: "Embedder | None" = None
 
+# Cache models alongside the repo so they survive git resets
+_MODEL_CACHE = str(Path(__file__).resolve().parent.parent / "models" / "fastembed")
+
 
 class Embedder:
     def __init__(self, model_name: str = EMBED_MODEL) -> None:
-        self._model = TextEmbedding(model_name=model_name)
+        os.makedirs(_MODEL_CACHE, exist_ok=True)
+        self._model = TextEmbedding(model_name=model_name, cache_dir=_MODEL_CACHE)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
