@@ -32,7 +32,7 @@ class CheckpointCleanupConfig:
         Set to 0 or None to disable cleanup.
     run_on_heartbeat: If True, prune runs automatically on heartbeat ticks.
     """
-    keep_last: int = 100
+    keep_last: int = 250
     run_on_heartbeat: bool = False
 
 
@@ -40,7 +40,7 @@ async def prune_checkpoints(
     graph: Any,
     thread_id: str,
     *,
-    keep_last: int = 100,
+    keep_last: int = 250,
 ) -> int:
     """Remove old checkpoints for a thread, keeping the most recent N.
 
