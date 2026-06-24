@@ -100,7 +100,7 @@ Configured skills at compaction time:
 # HISTORY
 
 ## Recent Compression Trajectory
-Spend 300–500 words paraphrasing the conversation being summarized in this \
+Spend 500–1000 words paraphrasing the conversation being summarized in this \
 compaction. Tell the story: what the user asked, what the agent did, what \
 was discovered, what decisions were reached, and how the work progressed. \
 This is narrative, not a list — the successor must understand the full arc \
@@ -116,12 +116,17 @@ tool behavior, configuration gotchas) and process (workflow pitfalls, \
 assumptions that proved wrong).
 
 ## Full History Trajectories
-Carry history forward — a successor reading only this section should \
-understand how the work evolved over time.
-- Chronological phases, pivots, retries, and dead ends in order
-- What was tried, what failed or was abandoned, and why direction changed
-- Merge in relevant arcs from any previous compaction so history is not lost
-- Name the trajectory (e.g. "initial refactor", "debug loop", "user pivot to X")
+Carry history forward as a historian's chronicle. A successor reading only \
+this section should understand the full arc of work across time.
+
+Organize by distinct time periods. For each period write exactly 30–50 \
+words in an impartial, factual tone — date range, what happened, key \
+outcomes, and why it mattered. No commentary, no analysis, just events.
+
+- Label each period with a date/part-of-day marker (e.g. "2026-06-23 \
+morning", "2026-06-23 afternoon", "2026-06-23 evening")
+- Chronological order, newest period first
+- Merge relevant arcs from previous compactions so history is not lost
 
 # NEXT STEPS
 
@@ -268,7 +273,7 @@ Configured skills at compaction time:
 # HISTORY
 
 ## Recent Compression Trajectory
-Spend 300–500 words paraphrasing the operational activity being summarized \
+Spend 500–1000 words paraphrasing the operational activity being summarized \
 in this compaction. Tell the story: what happened, what the agent did, what \
 was observed, what decisions were reached, and how operations progressed. \
 This is narrative, not a list — the successor must understand the full arc \
@@ -283,11 +288,17 @@ avoid repeating. Record root causes, not symptoms. Include both technical \
 and process lessons.
 
 ## Full History Trajectories
-Carry history forward — chronological arc of recent operational activity.
-- Phases, pivots, retries, and dead ends in order
-- What was tried, what failed, and why direction changed
-- Merge relevant arcs from any previous compaction
-- Standing loops or recurring duties and how they evolved
+Carry history forward as a historian's chronicle. A successor reading only \
+this section should understand the full arc of operational activity.
+
+Organize by distinct time periods. For each period write exactly 30–50 \
+words in an impartial, factual tone — date range, what happened, key \
+outcomes, and why it mattered. No commentary, no analysis, just events.
+
+- Label each period with a date/part-of-day marker (e.g. "2026-06-23 \
+morning", "2026-06-23 afternoon", "2026-06-23 evening")
+- Chronological order, newest period first
+- Merge relevant arcs from previous compactions so history is not lost
 
 # NEXT STEPS
 
