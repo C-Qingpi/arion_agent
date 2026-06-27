@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +52,13 @@ class SearchService:
         self._watcher: WorkspaceWatcher | None = None
         self._warmup_thread: threading.Thread | None = None
         self._started = False
+        # Dedicated executor for search queries so they never compete with
+        # the agent's default asyncio thread pool (used by ToolExecutor for
+        # other sync tools).  Two workers cap concurrency; LanceDB's internal
+        # tokio runtime handles the I/O multiplexing.
+        self._query_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="search-query",
+        )
 
     @property
     def workspace(self) -> Path:
@@ -96,12 +104,37 @@ class SearchService:
             self._watcher.stop()
             self._watcher = None
         self._indexer.stop()
+        self._query_executor.shutdown(wait=False)
         self._started = False
 
     def status(self) -> IndexerStatus:
         return self._indexer.status
 
     def search(
+        self,
+        query: str,
+        *,
+        target_directories: list[str] | None = None,
+        path_glob: str | None = None,
+        num_results: int = FINAL_TOP_K,
+        min_score: float = MIN_HYBRID_SCORE,
+    ) -> list[SearchResult]:
+        """Run hybrid search on the dedicated query executor.
+
+        Submitting to a separate thread pool prevents LanceDB + embedding
+        operations from starving the agent's default executor (used by
+        ToolExecutor for other sync tools like shell_run, read_file, etc.).
+        """
+        return self._query_executor.submit(
+            self._search_impl,
+            query,
+            target_directories=target_directories,
+            path_glob=path_glob,
+            num_results=num_results,
+            min_score=min_score,
+        ).result()
+
+    def _search_impl(
         self,
         query: str,
         *,

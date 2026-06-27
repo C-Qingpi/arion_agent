@@ -21,6 +21,7 @@ state flows through AgentContext (context.py).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -346,11 +347,36 @@ def _build_react_graph(
                 )
             return await bound.ainvoke(msgs)
 
+        async def _invoke_with_abort(msgs: list[Any]) -> Any:
+            """Race the LLM call against abort_check, polling every 150ms.
+
+            When the user hits stop, cancel_event fires — the next poll
+            catches it and cancels the in-flight HTTP request mid-stream,
+            rather than waiting for the full response.
+            """
+            if abort_check is None:
+                return await _invoke_model(msgs)
+            task = asyncio.create_task(_invoke_model(msgs))
+            try:
+                while not task.done():
+                    if abort_check():
+                        task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
+                        raise AgentAborted("Aborted during model call")
+                    await asyncio.sleep(0.15)
+                return await task
+            except asyncio.CancelledError:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                raise
+
         last_exc: BaseException | None = None
         response = None
         for attempt in range(MAX_SELF_HEAL_RETRIES + 1):
             try:
-                response = await _invoke_model(messages)
+                response = await _invoke_with_abort(messages)
                 for mw in mw_stack:
                     response = mw.wrap_model_response(response, **mw_kwargs)
                 if not _ai_message_is_usable_response(response):
