@@ -9,8 +9,9 @@ from arion_agent.semantic_search.config import EMBED_BATCH_SIZE, EMBED_MODEL
 
 _embedder: "Embedder | None" = None
 
-# Cache models alongside the repo so they survive git resets
-_MODEL_CACHE = str(Path(__file__).resolve().parent.parent / "models" / "fastembed")
+# Persistent cache outside the repo so git clean -fdx (pull_setup.sh) doesn't wipe it.
+# One copy per machine, shared across all agent deployments.
+_MODEL_CACHE = str(Path.home() / ".cache" / "arion" / "fastembed")
 
 
 class Embedder:
