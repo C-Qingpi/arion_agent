@@ -72,6 +72,7 @@ def add_agentic_core(
     mw = AgenticCoreEnvironment(
         agent_id=ctx.agent_id,
         workspace_dir=ctx.workspace_dir,
+        identity_dir=ctx.identity_dir,
         stats=ctx.stats,
         plan_config=effective_plan_config,
         enable_status=enable_status,

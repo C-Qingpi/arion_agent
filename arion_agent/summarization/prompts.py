@@ -367,8 +367,8 @@ to you.
 
 Full transcript saved to {file_path} (use list_files and read_file if you \
 need verbatim details from earlier exchanges).
-A _human_prompts.md file in the same directory indexes all human messages \
-across compaction events for quick lookup.
+Use the lookup_user_prompts tool to search past user messages across \
+compaction events.
 
 <memory>
 {summary}
@@ -392,8 +392,8 @@ agent, continuing the same mission.
 
 Full activity log saved to {file_path} (use list_files and read_file \
 if you need verbatim details from earlier exchanges).
-A _human_prompts.md file in the same directory indexes all human messages \
-across compaction events for quick lookup.
+Use the lookup_user_prompts tool to search past user messages across \
+compaction events.
 
 <memory>
 {summary}

@@ -273,47 +273,6 @@ def find_kept_orphans(
 # ---------------------------------------------------------------------------
 
 
-def _extract_human_summaries(messages: list[AnyMessage]) -> list[str]:
-    """Extract full human message texts from a message list for indexing."""
-    summaries: list[str] = []
-    for m in messages:
-        if not isinstance(m, HumanMessage):
-            continue
-        text = m.content if isinstance(m.content, str) else str(m.content)
-        text = text.strip()
-        if not text:
-            continue
-        summaries.append(text)
-    return summaries
-
-
-def _build_human_index(summaries: list[str]) -> str:
-    """Format human message summaries as a numbered index block."""
-    if not summaries:
-        return ""
-    lines = ["## Human Messages\n"]
-    for i, s in enumerate(summaries, 1):
-        lines.append(f"{i}. {s}")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _append_human_prompts_file(
-    thread_dir: Path,
-    summaries: list[str],
-    event_number: int,
-    timestamp: str,
-) -> None:
-    """Append human prompts from this compression event to the thread index."""
-    if not summaries:
-        return
-    from arion_agent.util.persistence import append_file
-
-    header = f"# Event {event_number} ({timestamp})\n"
-    entries = "\n".join(f"- {s}" for s in summaries) + "\n\n"
-    append_file(thread_dir / "_human_prompts.md", header + entries)
-
-
 def write_transcript(
     messages: list[AnyMessage],
     thread_id: str,
@@ -321,11 +280,11 @@ def write_transcript(
     history_dir: Path,
     workspace_dir: Path | None = None,
 ) -> str | None:
-    """Write evicted messages to a markdown transcript file.
+    """Write evicted messages to a JSONL transcript file.
 
     Returns the workspace-relative directory path, or None on failure.
     """
-    from arion_agent.util.persistence import ensure_directory, file_exists, glob_files, write_file as persistence_write
+    from arion_agent.util.persistence import ensure_directory, file_exists, glob_files, append_jsonl
 
     thread_dir = history_dir / "conversation_history" / thread_id
     ensure_directory(thread_dir)
@@ -336,32 +295,43 @@ def write_transcript(
             return workspace_relative_path(thread_dir, workspace_dir)
         return str(thread_dir)
 
-    existing = [p for p in glob_files(thread_dir, "*.md") if p.name != "_human_prompts.md"]
+    existing = [p for p in glob_files(thread_dir, "*.jsonl")]
     event_number = len(existing) + 1
     now = datetime.now(UTC)
     timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    file_timestamp = now.strftime("%Y-%m-%dT%H-%M-%SZ")
-    file_name = f"{file_timestamp}.md"
+
+    participants: list[dict[str, str]] = []
+    human_count = 0
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            role = "human"
+            human_count += 1
+        elif isinstance(m, AIMessage):
+            role = "ai"
+        elif isinstance(m, ToolMessage):
+            role = "tool"
+        else:
+            role = type(m).__name__.lower().replace("message", "")
+        text = m.content if isinstance(m.content, str) else str(m.content)
+        participants.append({"role": role, "content": text})
+
+    record: dict[str, Any] = {
+        "event": event_number,
+        "ts_utc": timestamp,
+        "msg_count": len(messages),
+        "human_count": human_count,
+        "participants": participants,
+    }
+
+    file_name = f"{timestamp.replace(':', '-')}.jsonl"
     file_path = thread_dir / file_name
     if file_exists(file_path):
-        file_name = f"{file_timestamp}_{event_number}.md"
+        file_name = f"{timestamp.replace(':', '-')}_{event_number}.jsonl"
         file_path = thread_dir / file_name
 
-    human_summaries = _extract_human_summaries(messages)
-    human_index = _build_human_index(human_summaries)
-
-    content = (
-        f"# Compression event {event_number}\n"
-        f"Timestamp: {timestamp}\n"
-        f"Messages evicted: {len(messages)}\n\n"
-        + (f"{human_index}\n---\n\n" if human_index else "---\n\n")
-        + f"{get_buffer_string(messages)}\n"
-    )
-
     try:
-        persistence_write(file_path, content)
-        _append_human_prompts_file(thread_dir, human_summaries, event_number, timestamp)
-        logger.info("Wrote transcript: %s (%d messages, %d human)", file_path, len(messages), len(human_summaries))
+        append_jsonl(file_path, record)
+        logger.info("Wrote transcript: %s (%d messages, %d human)", file_path, len(messages), human_count)
     except OSError:
         logger.exception("Failed to write transcript to %s", file_path)
         return None

@@ -32,8 +32,6 @@ from langchain_core.messages import (
 
 from arion_agent.summarization.compress import (
     PrefetchRegistry,
-    _build_human_index,
-    _extract_human_summaries,
     evaluate_policy,
     evaluate_prefetch_policy,
     find_kept_orphans,
@@ -548,10 +546,10 @@ class TestTruncateArgs:
 class TestTranscriptWriting:
     @staticmethod
     def _transcript_files(thread_dir: Path) -> list[Path]:
-        """Return only timestamped transcript files, excluding _human_prompts.md."""
-        return [p for p in thread_dir.glob("*.md") if p.name != "_human_prompts.md"]
+        """Return JSONL transcript files."""
+        return list(thread_dir.glob("*.jsonl"))
 
-    def test_writes_markdown_file(self):
+    def test_writes_jsonl_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             history_dir = Path(tmpdir) / "agent"
             msgs = [HumanMessage(content="hello"), AIMessage(content="world")]
@@ -559,58 +557,21 @@ class TestTranscriptWriting:
             assert result is not None
 
             thread_dir = history_dir / "conversation_history" / "thread-1"
-            md_files = self._transcript_files(thread_dir)
-            assert len(md_files) == 1
-            content = md_files[0].read_text()
-            assert "Compression event 1" in content
-            assert "hello" in content
-            assert "world" in content
+            jsonl_files = self._transcript_files(thread_dir)
+            assert len(jsonl_files) == 1
 
-    def test_writes_human_index_header(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            history_dir = Path(tmpdir) / "agent"
-            msgs = [
-                HumanMessage(content="find the bug in auth module"),
-                AIMessage(content="checking..."),
-                HumanMessage(content="also check the tests"),
-                AIMessage(content="done"),
-            ]
-            write_transcript(msgs, "t1", history_dir=history_dir)
-
-            thread_dir = history_dir / "conversation_history" / "t1"
-            md_files = self._transcript_files(thread_dir)
-            content = md_files[0].read_text()
-            assert "## Human Messages" in content
-            assert "1. find the bug in auth module" in content
-            assert "2. also check the tests" in content
-
-    def test_writes_human_prompts_index_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            history_dir = Path(tmpdir) / "agent"
-            msgs1 = [HumanMessage(content="first request"), AIMessage(content="ok")]
-            write_transcript(msgs1, "t1", history_dir=history_dir)
-            msgs2 = [HumanMessage(content="second request"), AIMessage(content="done")]
-            write_transcript(msgs2, "t1", history_dir=history_dir)
-
-            thread_dir = history_dir / "conversation_history" / "t1"
-            index_path = thread_dir / "_human_prompts.md"
-            assert index_path.exists()
-            index_content = index_path.read_text()
-            assert "first request" in index_content
-            assert "second request" in index_content
-            assert "Event 1" in index_content
-            assert "Event 2" in index_content
-
-    def test_no_human_messages_no_index_section(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            history_dir = Path(tmpdir) / "agent"
-            msgs = [AIMessage(content="system init"), ToolMessage(content="ok", tool_call_id="tc1")]
-            write_transcript(msgs, "t1", history_dir=history_dir)
-
-            thread_dir = history_dir / "conversation_history" / "t1"
-            md_files = self._transcript_files(thread_dir)
-            content = md_files[0].read_text()
-            assert "## Human Messages" not in content
+            from arion_agent.util.persistence import load_jsonl
+            records = load_jsonl(jsonl_files[0])
+            assert len(records) == 1
+            r = records[0]
+            assert r["event"] == 1
+            assert r["msg_count"] == 2
+            assert r["human_count"] == 1
+            participants = r["participants"]
+            assert participants[0]["role"] == "human"
+            assert "hello" in participants[0]["content"]
+            assert participants[1]["role"] == "ai"
+            assert "world" in participants[1]["content"]
 
     def test_multiple_transcripts_increment(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -621,8 +582,8 @@ class TestTranscriptWriting:
             write_transcript(msgs, "t1", history_dir=history_dir)
 
             thread_dir = history_dir / "conversation_history" / "t1"
-            md_files = self._transcript_files(thread_dir)
-            assert len(md_files) == 2
+            jsonl_files = self._transcript_files(thread_dir)
+            assert len(jsonl_files) == 2
 
     def test_empty_messages_no_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -630,47 +591,8 @@ class TestTranscriptWriting:
             result = write_transcript([], "t1", history_dir=history_dir)
             assert result is not None
             thread_dir = history_dir / "conversation_history" / "t1"
-            md_files = self._transcript_files(thread_dir)
-            assert len(md_files) == 0
-
-
-class TestHumanMessageExtraction:
-    def test_extracts_human_messages_only(self):
-        msgs = [
-            HumanMessage(content="do this"),
-            AIMessage(content="ok"),
-            HumanMessage(content="and that"),
-            ToolMessage(content="result", tool_call_id="tc1"),
-        ]
-        summaries = _extract_human_summaries(msgs)
-        assert summaries == ["do this", "and that"]
-
-    def test_preserves_full_message(self):
-        long_msg = "x" * 300
-        msgs = [HumanMessage(content=long_msg)]
-        summaries = _extract_human_summaries(msgs)
-        assert len(summaries) == 1
-        assert summaries[0] == long_msg
-
-    def test_preserves_multiline(self):
-        msgs = [HumanMessage(content="first line\nsecond line\nthird line")]
-        summaries = _extract_human_summaries(msgs)
-        assert summaries == ["first line\nsecond line\nthird line"]
-
-    def test_skips_empty_messages(self):
-        msgs = [HumanMessage(content=""), HumanMessage(content="   "), HumanMessage(content="real")]
-        summaries = _extract_human_summaries(msgs)
-        assert summaries == ["real"]
-
-    def test_build_human_index_format(self):
-        summaries = ["hello world", "fix the bug"]
-        index = _build_human_index(summaries)
-        assert "## Human Messages" in index
-        assert "1. hello world" in index
-        assert "2. fix the bug" in index
-
-    def test_build_human_index_empty(self):
-        assert _build_human_index([]) == ""
+            jsonl_files = self._transcript_files(thread_dir)
+            assert len(jsonl_files) == 0
 
 
 # ---------------------------------------------------------------------------

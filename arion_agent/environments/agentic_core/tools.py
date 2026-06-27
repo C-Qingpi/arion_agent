@@ -2,6 +2,7 @@
 
 These are tools core to agent intelligence, not external environment interaction.
   - maintenance_tool: echo/test (diagnostic)
+  - lookup_user_prompts: search past user messages from conversation history
   - update_plan: structured work planning with programmatic enforcement
   - get_running_status: session metrics awareness
   - The task tool (subagent spawning) is contributed by SubagentMiddleware
@@ -12,13 +13,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langchain_core.tools import tool
 
-from arion_agent.util.persistence import workspace_relative_path
+from arion_agent.util.persistence import (
+    file_exists,
+    glob_files,
+    load_jsonl,
+    workspace_relative_path,
+)
 
 if TYPE_CHECKING:
     from arion_agent.environments.agentic_core.plan_registry import PlanRegistry
@@ -65,6 +72,118 @@ async def maintenance_tool(
     if delay_seconds > 0:
         await asyncio.sleep(delay_seconds)
     return f"[maintenance_tool] echo after {delay_seconds}s: {message}"
+
+
+def _create_lookup_user_prompts(identity_dir: Path) -> "BaseTool":
+    """Build a lookup_user_prompts tool bound to the agent's identity directory."""
+
+    @tool
+    async def lookup_user_prompts(
+        thread_id: str,
+        page: int = 1,
+        count: int = 20,
+        since_days: int = 2,
+        regex: str = ".*",
+    ) -> str:
+        """Search past user prompts from conversation history archives.
+
+        Reads JSONL transcript files written by the compaction system.
+        Returns user prompts matching the filters.
+
+        Args:
+            thread_id: Thread/subagent identifier (uses "default" for main thread).
+            page: Page number for pagination (1-indexed, default 1).
+            count: Results per page (default 20).
+            since_days: Only consider transcripts from the last N days (default 2).
+            regex: Filter prompts by regex on content (default ".*" = all).
+
+        Returns:
+            Paginated matching user prompts with timestamps and event numbers.
+            If no history exists, explains that compaction may not be enabled.
+        """
+        history_dir = identity_dir / "conversation_history" / thread_id
+        if not file_exists(history_dir):
+            return (
+                "No conversation history directory found for this thread. "
+                "Compaction may not be enabled, or no compression events "
+                "have occurred yet."
+            )
+
+        try:
+            pattern_re = re.compile(regex)
+        except re.error as exc:
+            return f"Error: invalid regex pattern -- {exc}"
+
+        cutoff = datetime.now(UTC) - timedelta(days=since_days)
+
+        jsonl_files = glob_files(history_dir, "*.jsonl")
+        if not jsonl_files:
+            return (
+                "No JSONL transcript files found in conversation history "
+                "for this thread. No compression events since JSONL support "
+                "was added, or compaction is not enabled."
+            )
+
+        matched: list[dict] = []
+        for fpath in jsonl_files:
+            try:
+                records = load_jsonl(fpath)
+            except (OSError, json.JSONDecodeError):
+                logger.debug("Failed to read JSONL transcript: %s", fpath)
+                continue
+
+            for record in records:
+                ts_utc = record.get("ts_utc", "")
+                if not ts_utc:
+                    continue
+                try:
+                    rec_ts = datetime.fromisoformat(ts_utc.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    continue
+                if rec_ts < cutoff:
+                    continue
+
+                event = record.get("event", "?")
+                participants = record.get("participants", [])
+                for p in participants:
+                    if p.get("role") != "human":
+                        continue
+                    content = p.get("content", "").strip()
+                    if not content:
+                        continue
+                    if pattern_re.search(content):
+                        short = content[:500] + ("..." if len(content) > 500 else "")
+                        matched.append({
+                            "ts": ts_utc,
+                            "event": event,
+                            "file": fpath.name,
+                            "content": short,
+                        })
+
+        if not matched:
+            return (
+                f"No user prompts matched (since_days={since_days}, "
+                f"regex={regex!r}). "
+                f"Searched {len(jsonl_files)} transcript files."
+            )
+
+        total = len(matched)
+        start = (page - 1) * count
+        end = start + count
+        page_items = matched[start:end]
+
+        lines = [
+            f"User prompts matching since_days={since_days}, regex={regex!r}",
+            f"Total matches: {total} | Page {page}/{max(1, (total - 1) // count + 1)} | Showing {len(page_items)}",
+            "",
+        ]
+        for item in page_items:
+            lines.append(f"[Event {item['event']}] [{item['ts']}] ({item['file']})")
+            lines.append(f"  {item['content']}")
+            lines.append("")
+        return "\n".join(lines)
+
+    return lookup_user_prompts
 
 
 def _create_update_plan(
@@ -146,6 +265,7 @@ def create_agentic_core_tools(
     plan_registry: "PlanRegistry | None" = None,
     enable_status: bool = False,
     clock: "AgentClock | None" = None,
+    identity_dir: Path | None = None,
 ) -> list:
     """Create all agentic core tools.
 
@@ -158,8 +278,12 @@ def create_agentic_core_tools(
         plan_registry: PlanRegistry instance for structured plan storage.
         enable_status: Whether to include get_running_status tool.
         clock: AgentClock for timezone-aware timestamps. None = UTC fallback.
+        identity_dir: Agent identity directory (needed for lookup_user_prompts).
     """
     tools = [maintenance_tool]
+
+    if identity_dir is not None:
+        tools.append(_create_lookup_user_prompts(identity_dir))
 
     if (
         plan_config is not None

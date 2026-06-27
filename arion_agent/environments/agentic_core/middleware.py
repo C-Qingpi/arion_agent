@@ -2,6 +2,7 @@
 
 Provides:
   - maintenance_tool (always)
+  - lookup_user_prompts (always, reads conversation history archives)
   - update_plan (default on, configurable via PlanConfig)
   - get_running_status (default off, opt-in via enable_status)
 
@@ -45,6 +46,7 @@ class AgenticCoreEnvironment(ArionMiddleware):
         self,
         agent_id: str | None = None,
         workspace_dir: Path | None = None,
+        identity_dir: Path | None = None,
         stats: AgentStats | None = None,
         plan_config: PlanConfig | None = None,
         enable_status: bool = False,
@@ -52,6 +54,7 @@ class AgenticCoreEnvironment(ArionMiddleware):
     ) -> None:
         self._agent_id = agent_id
         self._workspace_dir = workspace_dir
+        self._identity_dir = identity_dir
         self._stats = stats
         self._plan_config = plan_config
         self._enable_status = enable_status
@@ -72,6 +75,7 @@ class AgenticCoreEnvironment(ArionMiddleware):
             plan_registry=self._plan_registry,
             enable_status=enable_status,
             clock=clock,
+            identity_dir=identity_dir,
         )
 
     @property
