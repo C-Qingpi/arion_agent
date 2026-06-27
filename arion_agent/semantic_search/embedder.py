@@ -1,23 +1,18 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from fastembed import TextEmbedding
 
-from arion_agent.semantic_search.config import EMBED_BATCH_SIZE, EMBED_MODEL
+from arion_agent.semantic_search.config import EMBED_BATCH_SIZE, EMBED_MODEL, FASTEMBED_CACHE_DIR
 
 _embedder: "Embedder | None" = None
-
-# Persistent cache outside the repo so git clean -fdx (pull_setup.sh) doesn't wipe it.
-# One copy per machine, shared across all agent deployments.
-_MODEL_CACHE = str(Path.home() / ".cache" / "arion" / "fastembed")
 
 
 class Embedder:
     def __init__(self, model_name: str = EMBED_MODEL) -> None:
-        os.makedirs(_MODEL_CACHE, exist_ok=True)
-        self._model = TextEmbedding(model_name=model_name, cache_dir=_MODEL_CACHE)
+        os.makedirs(FASTEMBED_CACHE_DIR, exist_ok=True)
+        self._model = TextEmbedding(model_name=model_name, cache_dir=FASTEMBED_CACHE_DIR)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from arion_agent.semantic_search.config import CJK_TRANSLATE_THRESHOLD, MT_MODEL
+from arion_agent.semantic_search.config import CJK_TRANSLATE_THRESHOLD, MT_MODEL, TRANSFORMERS_CACHE_DIR, HF_HOME_DIR
 
 if TYPE_CHECKING:
     from transformers import MarianMTModel, MarianTokenizer
@@ -39,12 +39,9 @@ def _load_mt() -> tuple[MarianMTModel, MarianTokenizer]:
     global _model, _tokenizer
     if _model is None or _tokenizer is None:
         import os
-        from pathlib import Path
-
-        # Cache models alongside the repo so they survive git resets
-        _cache = str(Path(__file__).resolve().parent.parent / "models" / "transformers")
-        os.makedirs(_cache, exist_ok=True)
-        os.environ.setdefault("TRANSFORMERS_CACHE", _cache)
+        os.makedirs(TRANSFORMERS_CACHE_DIR, exist_ok=True)
+        # Env vars already set by config import; ensure dirs exist
+        os.makedirs(HF_HOME_DIR, exist_ok=True)
 
         from transformers import MarianMTModel, MarianTokenizer
 

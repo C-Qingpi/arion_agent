@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,6 +10,19 @@ DEFAULT_WORKSPACE = PACKAGE_DIR.parent
 
 # Prototype-local index (CLI default when --index-dir omitted uses workspace/.arion/index)
 DEFAULT_INDEX_DIR = PACKAGE_DIR / ".index"
+
+# ── Central model cache ──────────────────────────────────────────────────
+# All downloaded models (fastembed, transformers, huggingface_hub) live under
+# one persistent directory outside any repo so git clean -fdx won't wipe them.
+_MODELS_CACHE = Path.home() / ".cache" / "arion" / "models"
+FASTEMBED_CACHE_DIR = str(_MODELS_CACHE / "fastembed")
+TRANSFORMERS_CACHE_DIR = str(_MODELS_CACHE / "transformers")
+HF_HOME_DIR = str(_MODELS_CACHE / "huggingface")
+
+# Set env vars early so downstream libraries pick them up on first import.
+os.environ.setdefault("TRANSFORMERS_CACHE", TRANSFORMERS_CACHE_DIR)
+os.environ.setdefault("HF_HOME", HF_HOME_DIR)
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(_MODELS_CACHE / "huggingface" / "hub"))
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_BATCH_SIZE = 64
